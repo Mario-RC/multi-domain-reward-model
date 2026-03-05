@@ -1,4 +1,4 @@
-# Custom ArmoRM
+# Mmulti-Domain Model
 
 This directory contains my custom version of ArmoRM to train a multi-objective reward model using custom data and a data preparation pipeline adapted to my workflow.
 
