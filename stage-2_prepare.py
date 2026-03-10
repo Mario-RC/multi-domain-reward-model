@@ -59,7 +59,7 @@ else:
 
 # Resolve local output directory for generated embeddings.
 script_dir = os.path.dirname(os.path.abspath(__file__))
-BASE_DATA_DIR = os.path.join(script_dir, "data", "ArmoRM")
+BASE_DATA_DIR = os.path.join(script_dir, "model")
 
 model_name = args.model_path.split("/")[-1]
 dataset_name = args.dataset_path.split("/")[-1]

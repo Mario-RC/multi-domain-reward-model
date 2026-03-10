@@ -12,16 +12,15 @@ armorm/
 # generated artifacts
 armo-rm/data/
 armo-rm/logs/
-data/
-ArmoRM/
+model/
 logs/
 *.safetensors
 *.pt
 
-# large raw datasets (keep templates/configs only)
-armo-rm/datasets/stage_1.jsonl
-armo-rm/datasets/stage_2.jsonl
-datasets/stage_1.jsonl
-datasets/stage_2.jsonl
+# large raw data files (keep templates/configs only)
+armo-rm/data/stage_1.jsonl
+armo-rm/data/stage_2.jsonl
+data/stage_1.jsonl
+data/stage_2.jsonl
 stage_1.jsonl
 stage_2.jsonl

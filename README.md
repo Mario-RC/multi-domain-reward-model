@@ -1,4 +1,4 @@
-# Mmulti-Domain Model
+# Multi-Domain Model
 
 This directory contains my custom version of ArmoRM to train a multi-objective reward model using custom data and a data preparation pipeline adapted to my workflow.
 
@@ -17,7 +17,7 @@ The multi-domain data I use comes from:
 
 - https://github.com/mestecha/multidomain_data_scoring/tree/main
 
-In this version, Stage 1 is fed with **local JSONL files** (for example, `datasets/stage_1.jsonl`) instead of relying exclusively on a remote Hugging Face dataset.
+In this version, Stage 1 is fed with **local JSONL files** (for example, `data/stage_1.jsonl`) instead of relying exclusively on a remote Hugging Face dataset.
 
 ---
 
@@ -70,7 +70,7 @@ This version uses **23 custom attributes** in `stage-1_prepare.py` and `stage-1_
 
 ### 2) Local-data oriented pipeline
 - Prioritizes local input (`--dataset_path` as a path to a JSONL).
-- Consistent output structure in `data/ArmoRM/...`.
+- Consistent output structure in `model/...`.
 - Support for **sharding** (`--n_shards`, `--shard_idx`) to split processing tasks.
 
 ### 3) Stage 1 training adapted to the new scheme
@@ -83,20 +83,22 @@ This version uses **23 custom attributes** in `stage-1_prepare.py` and `stage-1_
 - `stage-2_train.py` consumes Stage 1 weights and preference embeddings.
 - Supports single-GPU and multi-GPU (`torchrun`) training.
 
+### 5) Stage 3 Packaging Script
+- `stage-3_package_model.py` assembles and saves the final packaged reward model.
 ---
 
 ## Recommended Execution Flow
 
-Base script: `armorm.sh`
+Base script: `mdorm.sh`
 
 ## Quickstart (3 commands)
 
-> Assumes you run from `multidomain_model/armo-rm` and already have your local files prepared:
+> Assumes you run from `multidomain_model/` and already have your local files prepared:
 > - Stage 1 file: `<PATH_STAGE1_JSONL>`
 > - Stage 2 pairwise file: `<PATH_STAGE2_JSONL>`
 
 ```bash
-pip install -r ../requirements.txt
+pip install -r requirements.txt
 ```
 
 ```bash
@@ -106,14 +108,14 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-1_train.py --model_path sfairXC/FsfairX-LLa
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 --model_family llama3 --dataset_path <PATH_STAGE2_JSONL> --dataset_split train --n_shards 1 --shard_idx 1 --device 0 && \
-CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 --model_family llama3 --multi_objective_dataset mdo --preference_dataset stage_2-train --reference_dataset RLHFlow/UltraFeedback-preference-standard --device 0
+CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 --model_family llama3 --multi_objective_dataset mdo --preference_dataset data/stage_2 --reference_dataset RLHFlow/UltraFeedback-preference-standard --device 0
 ```
 
 ### Stage 1 prepare
 ```bash
 CUDA_VISIBLE_DEVICES=0 python3 stage-1_prepare.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
-  --dataset_path datasets/stage_1 \
+  --dataset_path data/stage_1.jsonl \
   --output_dataset_name mdo \
   --n_shards 1 --shard_idx 1 --device 0
 ```
@@ -130,7 +132,7 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-1_train.py \
 CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
   --model_family llama3 \
-  --dataset_path datasets/stage_2 \
+  --dataset_path data/stage_2 \
   --dataset_split train --n_shards 1 --shard_idx 1 --device 0
 ```
 
@@ -158,10 +160,24 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
   --model_family llama3 \
   --multi_objective_dataset mdo \
-  --preference_dataset datasets/stage_2 \
+  --preference_dataset data/stage_2 \
   --reference_dataset RLHFlow/UltraFeedback-preference-standard \
-  --eval_reward_bench \
-  --device 0
+  --eval_reward_bench --device 0
+```
+
+### Stage 3 Packaging Model
+```bash
+python3 stage-3_package_model.py
+```
+
+### Evaluate the packaged model
+```bash
+python3 evaluate.py
+```
+
+### Run quick prediction comparison
+```bash
+python3 predict.py
 ```
 
 ---
@@ -169,42 +185,46 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
 ## Directory Tree
 
 ```text
-data/
-└── ArmoRM/
-    ├── embeddings/
-    │   └── FsfairX-LLaMA3-RM-v0.1/
-    │       ├── mdo/
-    │       │   └── mdo-00001-of-00001.safetensors
-    │       │
-    │       ├── reward-bench-filtered/
-    │       │   └── reward-bench-filtered.safetensors
-    │       │
-    │       ├── stage_2-train/
-    │       │   └── stage_2-train.safetensors
-    │       │
-    │       └── UltraFeedback-preference-standard-train/
-    │           └── UltraFeedback-preference-standard-train.safetensors
-    │
-    ├── regression_weights/
-    │   └── FsfairX-LLaMA3-RM-v0.1_ArmoRM-Multi-Objective-Data-v0.1.pt
-    │
-    └── gating_network/
-        └── gating_network_FsfairX-LLaMA3-RM-v0.1_mo_mdo_pref_stage_2-train_T10.0_N2000_seed0.pt
+model/
+├── embeddings/
+│   └── <base_model>/
+│       ├── mdo/
+│       │   └── mdo-00001-of-00001.safetensors
+│       │
+│       ├── reward-bench-filtered/
+│       │   └── reward-bench-filtered.safetensors
+│       │
+│       ├── stage_2-train/
+│       │   └── stage_2-train.safetensors
+│       │
+│       └── UltraFeedback-preference-standard-train/
+│           └── UltraFeedback-preference-standard-train.safetensors
+│
+├── gating_network/
+│   └── gating_network_<base_model>_mo_mdo_pref_stage_2-train_T10.0_N2000_seed0.pt
+│
+├── regression_weights/
+│   └── <base_model>_mdo.pt
+│
+└── multi-domain-rm-llama-3-8b-it/
+  ├── config.json
+  ├── model-00001-of-0000X.safetensors
+  └── ...
 ```
 
 ---
 
 ## Artifact Structure
 
-- `data/ArmoRM/embeddings/<model_name>/<dataset_name>/*.safetensors`
-- `data/ArmoRM/regression_weights/<model_name>_<dataset_name>.pt`
+- `model/embeddings/<model_name>/<dataset_name>/*.safetensors`
+- `model/regression_weights/<model_name>_<dataset_name>.pt`
 - `logs/*.txt`
 
 ---
 
 ## Credits
 
-This work is based on the original RLHFlow repository (ArmoRM), but this `armo-rm` folder documents and executes a custom adaptation focused on:
+This work is based on the original [RLHFlow repository](https://github.com/RLHFlow/RLHF-Reward-Modeling) (ArmoRM), but this `multidomain_model` folder documents and executes a custom adaptation focused on:
 
 - custom multi-domain attributes,
 - data from `multidomain_data_scoring`,

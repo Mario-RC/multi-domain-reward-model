@@ -4,7 +4,7 @@
 ### stage 1 prepare ###
 CUDA_VISIBLE_DEVICES=0 python3 stage-1_prepare.py \
 --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
---dataset_path datasets/stage_1.jsonl \
+--dataset_path data/stage_1.jsonl \
 --output_dataset_name mdo \
 --n_shards 1 --shard_idx 1 --device 0
 
@@ -19,7 +19,7 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-1_train.py \
 CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
 --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
 --model_family llama3 \
---dataset_path datasets/stage_2 \
+--dataset_path data/stage_2 \
 --dataset_split train --n_shards 1 --shard_idx 1 --device 0
 
 ### stage 2 prepare for reference data ###
@@ -42,7 +42,11 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
 --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
 --model_family llama3 \
 --multi_objective_dataset mdo \
---preference_dataset datasets/stage_2 \
+--preference_dataset data/stage_2 \
 --reference_dataset RLHFlow/UltraFeedback-preference-standard \
 --eval_reward_bench \
 --device 0
+
+##########################################
+### stage 3 packaging model ###
+python3 stage-3_package_model.py

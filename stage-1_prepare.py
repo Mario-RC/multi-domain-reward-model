@@ -215,13 +215,13 @@ except Exception as e:
 print(f"Final Embeddings tensor shape: {embeddings_tensor.shape}")
 print(f"Final Labels tensor shape: {labels_tensor.shape}")
 
-# Build output directory structure: data/ArmoRM/embeddings/<model>/<dataset_name>
+# Build output directory structure: model/embeddings/<model>/<dataset_name>
 script_dir = os.path.dirname(os.path.abspath(__file__))
-base_data_dir = os.path.join(script_dir, "data")
+base_data_dir = os.path.join(script_dir, "model")
 model_name = args.model_path.split("/")[-1]
 output_dataset_folder_name = args.output_dataset_name
 
-final_dir = os.path.join(base_data_dir, "ArmoRM", "embeddings", model_name, output_dataset_folder_name)
+final_dir = os.path.join(base_data_dir, "embeddings", model_name, output_dataset_folder_name)
 try:
     os.makedirs(final_dir, exist_ok=True)
     print(f"Ensured output directory exists: {final_dir}")

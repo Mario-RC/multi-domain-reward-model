@@ -43,13 +43,13 @@ parser.add_argument(
     "--embeddings_dir",
     type=str,
     default=None,
-    help="Optional override for the embeddings root. Defaults to ./data/ArmoRM/embeddings/.",
+    help="Optional override for the embeddings root. Defaults to ./model/embeddings/.",
 )
 parser.add_argument(
     "--output_dir",
     type=str,
     default=None,
-    help="Optional override for saving regression weights. Defaults to ./data/ArmoRM/regression_weights/.",
+    help="Optional override for saving regression weights. Defaults to ./model/regression_weights/.",
 )
 args = parser.parse_args()
 
@@ -78,7 +78,7 @@ print(f"Using {len(attributes)} custom attributes for regression.")
 
 # Base paths
 script_dir = os.path.dirname(os.path.abspath(__file__))
-default_base_data_dir = os.path.join(script_dir, "data", "ArmoRM")
+default_base_data_dir = os.path.join(script_dir, "model")
 
 # Determine embeddings directory
 if args.embeddings_dir:

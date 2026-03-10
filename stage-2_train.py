@@ -308,7 +308,7 @@ def main():
 
     # --- Resolve local base paths ---
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    BASE_DATA_DIR = os.path.join(script_dir, "data", "ArmoRM")
+    BASE_DATA_DIR = os.path.join(script_dir, "model")
     # ----------------------------------
 
     # Resolve reference dataset (fallback: preference dataset).
