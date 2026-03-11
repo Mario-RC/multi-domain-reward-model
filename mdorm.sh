@@ -4,7 +4,7 @@
 ### stage 1 prepare ###
 CUDA_VISIBLE_DEVICES=0 python3 stage-1_prepare.py \
 --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
---dataset_path data/stage_1.jsonl \
+--dataset_path data/stage_1 \
 --output_dataset_name mdo \
 --n_shards 1 --shard_idx 1 --device 0
 
@@ -50,3 +50,11 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
 ##########################################
 ### stage 3 packaging model ###
 python3 stage-3_package_model.py
+
+##########################################
+### evaluate ###
+python3 evaluate.py
+
+##########################################
+### predict ###
+python3 predict.py

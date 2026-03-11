@@ -66,6 +66,20 @@ def _has_at_least_one_attribute_score(example: dict) -> bool:
                 return True
     return False
 
+
+def _resolve_local_dataset_file(dataset_path: str):
+    """Resolve local JSON/JSONL path, accepting optional missing extension."""
+    candidate_paths = [dataset_path]
+    if not dataset_path.endswith(".jsonl"):
+        candidate_paths.append(f"{dataset_path}.jsonl")
+    if not dataset_path.endswith(".json"):
+        candidate_paths.append(f"{dataset_path}.json")
+
+    for candidate in candidate_paths:
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
 def find_token_for_gating(lst, model_family):
     """Return the start index of the last model-specific token pattern."""
     token_pattern = token_patterns[model_family]
@@ -123,12 +137,13 @@ final_dir = os.path.join(BASE_DATA_DIR, "embeddings", model_name, dataset_name)
 # Detect if it's a local JSON/JSONL file or a HuggingFace dataset
 
 all_data = []
-if args.dataset_path.endswith(".jsonl") or args.dataset_path.endswith(".json"):
-    print(f"Manually loading local JSONL file: {args.dataset_path}")
+local_dataset_file = _resolve_local_dataset_file(args.dataset_path)
+if local_dataset_file is not None:
+    print(f"Manually loading local JSONL file: {local_dataset_file}")
     import json
     kept = 0
     skipped_no_attribute_score = 0
-    with open(args.dataset_path, 'r', encoding='utf-8') as f:
+    with open(local_dataset_file, 'r', encoding='utf-8') as f:
         for line in f:
             try:
                 record = json.loads(line.strip())

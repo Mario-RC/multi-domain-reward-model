@@ -187,9 +187,9 @@ python3 predict.py
 ```text
 model/
 ├── embeddings/
-│   └── <base_model>/
-│       ├── mdo/
-│       │   └── mdo-00001-of-00001.safetensors
+│   └── <model_name>/
+│       ├── <dataset_name>/
+│       │   └── <dataset_name>-00001-of-00001.safetensors
 │       │
 │       ├── reward-bench-filtered/
 │       │   └── reward-bench-filtered.safetensors
@@ -201,10 +201,10 @@ model/
 │           └── UltraFeedback-preference-standard-all.safetensors
 │
 ├── gating_network/
-│   └── gating_network_<base_model>_mo_mdo_pref_stage_2-all_T10.0_N2000_seed0.pt
+│   └── gating_network_<model_name>_mo_<dataset_name>_pref_stage_2-all_T10.0_N2000_seed0.pt
 │
 ├── regression_weights/
-│   └── <base_model>_mdo.pt
+│   └── <model_name>_<dataset_name>.pt
 │
 └── multi-domain-rm-llama-3-8b-it/
   ├── config.json
@@ -217,8 +217,9 @@ model/
 ## Artifact Structure
 
 - `model/embeddings/<model_name>/<dataset_name>/*.safetensors`
+- `model/gating_network/gating_network_<model_name>_mo_<dataset_name>_pref_stage_2-all_T10.0_N2000_seed0.pt`
 - `model/regression_weights/<model_name>_<dataset_name>.pt`
-- `logs/*.txt`
+- `<model>`
 
 ---
 
