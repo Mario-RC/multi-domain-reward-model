@@ -8,3 +8,7 @@ safetensors
 tqdm
 scipy
 accelerate
+pyyaml
+tiktoken
+protobuf
+sentencepiece

@@ -22,14 +22,14 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
 --dataset_path data/stage_2 \
 --dataset_split all --n_shards 1 --shard_idx 1 --device 0
 
-### stage 2 prepare for reference data ###
+## stage 2 prepare for reference data ###
 CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
 --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
 --model_family llama3 \
 --dataset_path RLHFlow/UltraFeedback-preference-standard \
 --dataset_split all --n_shards 1 --shard_idx 1 --device 0
 
-### stage 2 prepare for reward-bench eval data ###
+## stage 2 prepare for reward-bench eval data ###
 CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
 --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
 --model_family llama3 \
@@ -49,12 +49,18 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
 
 ##########################################
 ### stage 3 packaging model ###
-python3 stage-3_package_model.py
+CUDA_VISIBLE_DEVICES=0 python3 stage-3_package_model.py \
+  --model_parent_dir model \
+  --output_model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################
 ### evaluate ###
-python3 evaluate.py
+CUDA_VISIBLE_DEVICES=0 python3 evaluate.py \
+  --model_parent_dir model \
+  --model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################
 ### predict ###
-python3 predict.py
+CUDA_VISIBLE_DEVICES=0 python3 predict.py \
+  --model_parent_dir model \
+  --model_name multi-domain-rm-llama-3-8b-it

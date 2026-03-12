@@ -1,0 +1,81 @@
+# Choose the active model profile with `model.selected`.
+model:
+  selected: gemma2
+  registry:
+    llama3:
+      model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+      model_family: llama3
+    gemma2:
+      model_path: sfairXC/FsfairX-Gemma2-RM-v0.1
+      model_family: gemma2
+    qwen3_nemotron:
+      model_path: nvidia/Qwen3-Nemotron-8B-BRRM
+      model_family: qwen3
+
+
+stage_1_prepare:
+  dataset_path: data/stage_1
+  output_dataset_name: mdo
+  n_shards: 1
+  shard_idx: 1
+  device: 0
+
+
+stage_1_train:
+  dataset_name: mdo # Must match output_dataset_name from stage_1_prepare.
+  embeddings_dir: null
+  output_dir: null
+
+
+# Choose the data with `stage_2_prepare.profile`.
+stage_2_prepare:
+  profile: reference_data
+  presets:
+    preference_data:
+      dataset_path: data/stage_2
+      dataset_split: all
+    reference_data:
+      dataset_path: RLHFlow/UltraFeedback-preference-standard
+      dataset_split: all
+    reward-bench_eval_data:
+      dataset_path: allenai/reward-bench
+      dataset_split: filtered
+  source: null
+  n_shards: 1
+  shard_idx: 1
+  device: 0
+  seq_len: 8192
+
+
+stage_2_train:
+  multi_objective_dataset: mdo
+  preference_dataset: data/stage_2
+  reference_dataset: RLHFlow/UltraFeedback-preference-standard
+  prepared_split: all
+  device: "0"
+  learning_rate: 0.001
+  weight_decay: 0.0
+  n_steps: 2000
+  batch_size: 1024
+  verbosity_dim: 4
+  corr_threshold: 0.03
+  eval_reward_bench: true
+  logit_scale: 1.0
+  temperature: 10.0
+  n_hidden: 3
+  hidden_size: 1024
+  dropout: 0.2
+  max_samples: null
+  seed: 0
+
+
+stage_3_package:
+  model_parent_dir: model
+  output_model_name: multi-domain-rm-gemma-2-9b-it
+
+
+# Inference target model (evaluate and predict).
+inference:
+  model_parent_dir: model
+  model_name: multi-domain-rm-gemma-2-9b-it
+  model_path: null

@@ -1,13 +1,42 @@
 from typing import Dict, List
 import torch
+from argparse import ArgumentParser
 from transformers import AutoTokenizer
-from modeling_custom import LlamaForRewardModelWithGating
+from modeling_custom import RewardModelWithGating
+from config_utils import load_yaml_config
+
+
+def _resolve_inference_model_path(
+    config: dict,
+    cli_model_path: str | None,
+    cli_model_parent_dir: str | None,
+    cli_model_name: str | None,
+) -> str:
+    if cli_model_path:
+        return cli_model_path
+
+    inference_cfg = config.get("inference", {}) if isinstance(config, dict) else {}
+    if not isinstance(inference_cfg, dict):
+        inference_cfg = {}
+
+    explicit_model_path = inference_cfg.get("model_path")
+    if explicit_model_path:
+        return str(explicit_model_path)
+
+    if cli_model_parent_dir or cli_model_name:
+        model_parent_dir = str(cli_model_parent_dir or inference_cfg.get("model_parent_dir", "model"))
+        model_name = str(cli_model_name or inference_cfg.get("model_name", "multi-domain-rm-llama-3-8b-it"))
+        return f"./{model_parent_dir}/{model_name}"
+
+    model_parent_dir = str(inference_cfg.get("model_parent_dir", "model"))
+    model_name = str(inference_cfg.get("model_name", "multi-domain-rm-llama-3-8b-it"))
+    return f"./{model_parent_dir}/{model_name}"
 
 class MultiDomainRMPipeline:
     def __init__(self, model_id, device_map="auto", torch_dtype=None, truncation=True, max_length=4096):
         if torch_dtype is None:
             torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-        self.model = LlamaForRewardModelWithGating.from_pretrained(
+        self.model = RewardModelWithGating.from_pretrained(
             model_id,
             device_map=device_map,
             torch_dtype=torch_dtype,
@@ -36,8 +65,18 @@ class MultiDomainRMPipeline:
 
 
 def main() -> None:
+    parser = ArgumentParser(description="Run quick prediction comparison using packaged reward model.")
+    parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
+    parser.add_argument("--model_path", type=str, default=None, help="Optional override for packaged model path.")
+    parser.add_argument("--model_parent_dir", type=str, default=None, help="Optional packaged model parent directory.")
+    parser.add_argument("--model_name", type=str, default=None, help="Optional packaged model directory name.")
+    args = parser.parse_args()
+
+    config = load_yaml_config(args.config_path)
+    model_path = _resolve_inference_model_path(config, args.model_path, args.model_parent_dir, args.model_name)
+
     # Initialize the local model.
-    rm = MultiDomainRMPipeline("./model/multi-domain-rm-llama-3-8b-it")
+    rm = MultiDomainRMPipeline(model_path)
 
     prompt = "I just moved to Japan for work and I feel overwhelmed and lonely."
 

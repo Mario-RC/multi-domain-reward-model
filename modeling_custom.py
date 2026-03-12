@@ -5,10 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
-from transformers import LlamaModel, LlamaPreTrainedModel
-from transformers.models.llama.modeling_llama import LLAMA_INPUTS_DOCSTRING
+from transformers import AutoConfig, AutoModel, PreTrainedModel
 from transformers.utils import ModelOutput
-from transformers.utils import add_start_docstrings_to_model_forward
 
 class GatingNetwork(nn.Module):
     def __init__(self, in_features: int, out_features: int, bias: bool = True, temperature: float = 10,
@@ -31,17 +29,28 @@ class GatingNetwork(nn.Module):
         x = F.softmax(x / self.temperature, dim=1)
         return x * self.logit_scale[0]
 
-token_pattern = [128009, 128006, 78191, 128007, 271]
+TOKEN_PATTERNS_BY_MODEL_TYPE = {
+    # Llama3: "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+    "llama": [128009, 128006, 78191, 128007, 271],
+    # Gemma2: "<end_of_turn>\n<start_of_turn>model\n"
+    "gemma2": [107, 108, 106, 2516, 108],
+}
 
 
-def find_token_for_gating(tokens: Sequence[int]) -> int:
+def find_token_for_gating(tokens: Sequence[int], model_type: Optional[str]) -> int:
     # Find the last token pattern occurrence used to extract prompt embedding.
+    token_pattern = TOKEN_PATTERNS_BY_MODEL_TYPE.get(model_type)
+    if not token_pattern:
+        # Fallback for families without explicit pattern support.
+        return max(len(tokens) - 1, 0)
+
     token_pattern_len = len(token_pattern)
     search_end = len(tokens)
     for j in range(search_end - token_pattern_len, -1, -1):
         if list(tokens[j:j + token_pattern_len]) == token_pattern:
             return j
-    raise ValueError("Token pattern not found in the list.")
+    # Fallback if exact marker pattern is not present in rendered prompt.
+    return max(len(tokens) - 1, 0)
 
 @dataclass
 class CustomOutput(ModelOutput):
@@ -52,11 +61,16 @@ class CustomOutput(ModelOutput):
     score: Optional[torch.Tensor] = None
     logits: Optional[torch.Tensor] = None
 
-class LlamaForRewardModelWithGating(LlamaPreTrainedModel):
+class RewardModelWithGating(PreTrainedModel):
+    """Backbone-agnostic reward model with a prompt-conditioned gating network."""
+
+    config_class = AutoConfig
+    base_model_prefix = "model"
+
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
-        self.model = LlamaModel(config)
+        self.model = AutoModel.from_config(config)
         config_dict = config.to_dict()
         
         # Default objective count for this project.
@@ -76,7 +90,6 @@ class LlamaForRewardModelWithGating(LlamaPreTrainedModel):
                                     hidden_dim=config_dict.get("gating_hidden_dim", 1024),
                                     n_hidden=config_dict.get("gating_n_hidden", 3))
 
-    @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
     def forward(
             self,
             input_ids: Optional[torch.LongTensor] = None,
@@ -132,8 +145,10 @@ class LlamaForRewardModelWithGating(LlamaPreTrainedModel):
         if input_ids is None:
             raise ValueError("input_ids is required to compute gating token positions.")
 
+        model_type = getattr(self.config, "model_type", None)
+
         gating_token_positions = [
-            find_token_for_gating(ids.detach().cpu().tolist()) for ids in input_ids
+            find_token_for_gating(ids.detach().cpu().tolist(), model_type) for ids in input_ids
         ]
         prompt_embedding = tokens_hidden_states[dummy_iterator, gating_token_positions, :]
         gating_output = self.gating(prompt_embedding)
@@ -148,3 +163,7 @@ class LlamaForRewardModelWithGating(LlamaPreTrainedModel):
             score=score,
             logits=score,
         )
+
+
+# Backward compatibility alias for existing imports/checkpoints.
+LlamaForRewardModelWithGating = RewardModelWithGating

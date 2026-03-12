@@ -1,13 +1,50 @@
 import torch
+from argparse import ArgumentParser
 from transformers import AutoTokenizer
-from modeling_custom import LlamaForRewardModelWithGating
+from modeling_custom import RewardModelWithGating
+from config_utils import load_yaml_config
+
+
+def _resolve_inference_model_path(
+    config: dict,
+    cli_model_path: str | None,
+    cli_model_parent_dir: str | None,
+    cli_model_name: str | None,
+) -> str:
+    if cli_model_path:
+        return cli_model_path
+
+    inference_cfg = config.get("inference", {}) if isinstance(config, dict) else {}
+    if not isinstance(inference_cfg, dict):
+        inference_cfg = {}
+
+    explicit_model_path = inference_cfg.get("model_path")
+    if explicit_model_path:
+        return str(explicit_model_path)
+
+    if cli_model_parent_dir or cli_model_name:
+        model_parent_dir = str(cli_model_parent_dir or inference_cfg.get("model_parent_dir", "model"))
+        model_name = str(cli_model_name or inference_cfg.get("model_name", "multi-domain-rm-llama-3-8b-it"))
+        return f"./{model_parent_dir}/{model_name}"
+
+    model_parent_dir = str(inference_cfg.get("model_parent_dir", "model"))
+    model_name = str(inference_cfg.get("model_name", "multi-domain-rm-llama-3-8b-it"))
+    return f"./{model_parent_dir}/{model_name}"
 
 def main() -> None:
-    path = "./model/multi-domain-rm-llama-3-8b-it"
+    parser = ArgumentParser(description="Evaluate packaged reward model.")
+    parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
+    parser.add_argument("--model_path", type=str, default=None, help="Optional override for packaged model path.")
+    parser.add_argument("--model_parent_dir", type=str, default=None, help="Optional packaged model parent directory.")
+    parser.add_argument("--model_name", type=str, default=None, help="Optional packaged model directory name.")
+    args = parser.parse_args()
+
+    config = load_yaml_config(args.config_path)
+    path = _resolve_inference_model_path(config, args.model_path, args.model_parent_dir, args.model_name)
     use_cuda = torch.cuda.is_available()
     dtype = torch.bfloat16 if use_cuda else torch.float32
 
-    model = LlamaForRewardModelWithGating.from_pretrained(
+    model = RewardModelWithGating.from_pretrained(
         path,
         device_map="auto" if use_cuda else None,
         torch_dtype=dtype,

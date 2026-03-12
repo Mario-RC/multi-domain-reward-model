@@ -14,6 +14,7 @@ from argparse import ArgumentParser
 import traceback
 import json
 from datetime import datetime
+from config_utils import load_yaml_config, apply_section_overrides, resolve_model_from_config
 
 # Enable TF32 for faster matmul on supported GPUs
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -51,6 +52,15 @@ def _resolve_local_dataset_file(dataset_path: str):
             return candidate
     return None
 
+
+def _load_tokenizer_robust(model_path: str):
+    """Load tokenizer with fallback to slow tokenizer when fast conversion deps are missing."""
+    try:
+        return AutoTokenizer.from_pretrained(model_path)
+    except (ValueError, ImportError) as e:
+        print(f"Warning: Fast tokenizer load failed ({e}). Retrying with use_fast=False...")
+        return AutoTokenizer.from_pretrained(model_path, use_fast=False)
+
 # Project-specific regression targets drawn from several evaluation dimensions
 attributes = [
     # coherence (co_)
@@ -70,19 +80,39 @@ print(f"Using {len(attributes)} custom attributes for regression.")
 
 # Parse CLI arguments
 parser = ArgumentParser(description="Stage 1 Prepare: Extract embeddings and labels for multi-objective regression.")
+parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
+parser.add_argument("--model_key", type=str, default=None, help="Model key defined in config.yaml:model:registry.")
 parser.add_argument("--model_path", type=str, default="sfairXC/FsfairX-LLaMA3-RM-v0.1", help="Path or HF ID of the base Reward Model.")
 parser.add_argument(
     "--dataset_path",
     type=str,
     nargs='+',
-    required=True,
+    default=None,
     help="Path(s) to local JSON/JSONL files. Extension is optional (e.g. data/stage_1).",
 )
-parser.add_argument("--output_dataset_name", type=str, required=True, help="Unique name for the output dataset folder/file prefix.")
+parser.add_argument("--output_dataset_name", type=str, default=None, help="Unique name for the output dataset folder/file prefix.")
 parser.add_argument("--n_shards", type=int, default=1, help="Total number of shards to divide the dataset into.")
 parser.add_argument("--shard_idx", type=int, default=1, help="Index of the current shard to process (1-based).")
 parser.add_argument("--device", type=int, default=0, help="CUDA device index for model inference (e.g., 0, 1).")
 args = parser.parse_args()
+
+config = load_yaml_config(args.config_path)
+args = apply_section_overrides(args, config.get("stage_1_prepare", {}), skip_keys={"model_path"})
+args = resolve_model_from_config(args, config, needs_family=False)
+
+# Config values can provide a single string, while CLI with nargs='+' returns a list.
+# Normalize here so iteration always treats dataset paths as full path entries.
+if isinstance(args.dataset_path, str):
+    args.dataset_path = [args.dataset_path]
+elif isinstance(args.dataset_path, tuple):
+    args.dataset_path = list(args.dataset_path)
+
+if not args.dataset_path:
+    print("FATAL ERROR: --dataset_path is required (or set stage_1_prepare.dataset_path in config.yaml).")
+    sys.exit(1)
+if not args.output_dataset_name:
+    print("FATAL ERROR: --output_dataset_name is required (or set stage_1_prepare.output_dataset_name in config.yaml).")
+    sys.exit(1)
 
 # Manually load JSONL records into memory
 all_data = []
@@ -174,7 +204,7 @@ try:
         attn_implementation="flash_attention_2" if device != 'cpu' else None,
         device_map=device,
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+    tokenizer = _load_tokenizer_robust(args.model_path)
     if tokenizer.pad_token is None:
         # Fallback: use EOS token as PAD when PAD is undefined
         tokenizer.pad_token = tokenizer.eos_token

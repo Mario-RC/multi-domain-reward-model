@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from sklearn.model_selection import train_test_split
 import datasets
 import traceback  # Used for detailed error traces
+from config_utils import load_yaml_config, apply_section_overrides, resolve_model_from_config
 
 # --- DDP IMPORTS ---
 import torch.distributed as dist
@@ -274,6 +275,8 @@ def load_embeddings(embedding_path_pattern):
 def main():
     """Main function to parse arguments, load data, train the model, and evaluate."""
     parser = ArgumentParser(description="Train ArmoRM Gating Network using DDP")
+    parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
+    parser.add_argument("--model_key", type=str, default=None, help="Model key defined in config.yaml:model:registry.")
     parser.add_argument("--model_path", type=str, default="sfairXC/FsfairX-LLaMA3-RM-v0.1", help="Path or HF ID of the base Reward Model")
     parser.add_argument("--multi_objective_dataset", type=str, default="RLHFlow/ArmoRM-Multi-Objective-Data-v0.1", help="Dataset used for Stage 1 regression (name used for saving)")
     parser.add_argument("--preference_dataset", type=str, default="RLHFlow/pair_data_v2_80K_wsafety", help="Pairwise preference dataset for Stage 2 training")
@@ -292,7 +295,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1024, help="Global batch size across all GPUs")
     parser.add_argument("--verbosity_dim", type=int, default=4, help="Index (0-based) of the verbosity attribute in the multi-objective reward vector")
     parser.add_argument("--corr_threshold", type=float, default=0.03, help="Maximum allowed absolute Spearman correlation for verbosity debiasing")
-    parser.add_argument("--model_family", type=str, default="llama3", choices=["llama3", "gemma2"], help="Model family for token pattern matching during embedding extraction (if applicable, less relevant here)")
+    parser.add_argument("--model_family", type=str, default="llama3", choices=["llama3", "gemma2", "qwen3", "auto"], help="Model family for token pattern matching during embedding extraction (if applicable, less relevant here)")
     parser.add_argument("--eval_reward_bench", action="store_true", help="Evaluate on RewardBench after training (requires RewardBench embeddings)")
     parser.add_argument("--logit_scale", type=float, default=1.0, help="Scaling factor applied after softmax in the gating network")
     parser.add_argument("--temperature", type=float, default=10.0, help="Temperature for softmax scaling in the gating network")
@@ -302,6 +305,14 @@ def main():
     parser.add_argument("--max_samples", type=int, default=None, help="Load only the first N samples from datasets (for debugging RAM issues)")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
     args = parser.parse_args()
+
+    config = load_yaml_config(args.config_path)
+    args = apply_section_overrides(
+        args,
+        config.get("stage_2_train", {}),
+        skip_keys={"model_path", "model_family"},
+    )
+    args = resolve_model_from_config(args, config, needs_family=True)
 
     # --- DDP setup ---
     local_rank, rank, world_size = ddp_setup()

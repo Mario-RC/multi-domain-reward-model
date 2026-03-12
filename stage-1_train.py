@@ -14,6 +14,7 @@ from safetensors.torch import load_file
 from argparse import ArgumentParser
 import traceback  # For error logging
 from datetime import datetime
+from config_utils import load_yaml_config, apply_section_overrides, resolve_model_from_config
 
 print(f"Stage 1 Train started at {datetime.now().isoformat()}")
 
@@ -27,6 +28,8 @@ selects the best regularization, and saves the resulting weights.
 # Argument Parsing
 # ---------------------------
 parser = ArgumentParser(description="Stage 1 Train: Linear probing on precomputed embeddings")
+parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
+parser.add_argument("--model_key", type=str, default=None, help="Model key defined in config.yaml:model:registry.")
 parser.add_argument(
     "--model_path",
     type=str,
@@ -36,7 +39,7 @@ parser.add_argument(
 parser.add_argument(
     "--dataset_name",
     type=str,
-    required=True,
+    default=None,
     help="Dataset name produced by stage-1_prepare (e.g., 'mdo').",
 )
 parser.add_argument(
@@ -52,6 +55,14 @@ parser.add_argument(
     help="Optional override for saving regression weights. Defaults to ./model/regression_weights/.",
 )
 args = parser.parse_args()
+
+config = load_yaml_config(args.config_path)
+args = apply_section_overrides(args, config.get("stage_1_train", {}), skip_keys={"model_path"})
+args = resolve_model_from_config(args, config, needs_family=False)
+
+if not args.dataset_name:
+    print("FATAL ERROR: --dataset_name is required (or set stage_1_train.dataset_name in config.yaml).")
+    sys.exit(1)
 
 # Derive a short model name for paths
 args.model_name = args.model_path.split("/")[-1]

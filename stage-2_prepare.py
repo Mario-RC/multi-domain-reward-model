@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 from safetensors.torch import save_file
 from argparse import ArgumentParser
 from datetime import datetime
+from config_utils import cli_has_flag, load_yaml_config, apply_section_overrides, resolve_model_from_config
 
 # Enable TF32 for faster matmul on supported GPUs
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -70,31 +71,59 @@ def _has_at_least_one_attribute_score(example: dict) -> bool:
 def _resolve_local_dataset_file(dataset_path: str):
     """Resolve local JSON/JSONL path, accepting optional missing extension."""
     candidate_paths = [dataset_path]
-    if not dataset_path.endswith(".jsonl"):
-        candidate_paths.append(f"{dataset_path}.jsonl")
-    if not dataset_path.endswith(".json"):
-        candidate_paths.append(f"{dataset_path}.json")
+    if not dataset_path.endswith(".jsonl") and not dataset_path.endswith(".json"):
+        candidate_paths.extend([f"{dataset_path}.jsonl", f"{dataset_path}.json"])
 
     for candidate in candidate_paths:
         if os.path.isfile(candidate):
             return candidate
     return None
 
+
+def _load_tokenizer_robust(model_path: str):
+    """Load tokenizer with fallback to slow tokenizer when fast conversion deps are missing."""
+    try:
+        return AutoTokenizer.from_pretrained(model_path)
+    except (ValueError, ImportError) as e:
+        print(f"Warning: Fast tokenizer load failed ({e}). Retrying with use_fast=False...")
+        return AutoTokenizer.from_pretrained(model_path, use_fast=False)
+
 def find_token_for_gating(lst, model_family):
     """Return the start index of the last model-specific token pattern."""
-    token_pattern = token_patterns[model_family]
+    if model_family == "qwen3":
+        # Qwen chat templates can differ across checkpoints; use the last token as robust fallback.
+        return max(len(lst) - 1, 0)
+
+    token_pattern = token_patterns.get(model_family)
+    if not token_pattern:
+        # Fallback for unsupported families: use the last token position.
+        return max(len(lst) - 1, 0)
     token_pattern_len = len(token_pattern)
     search_end = len(lst)
     for j in range(search_end - token_pattern_len, -1, -1):
         if lst[j : j + token_pattern_len] == token_pattern:
             return j
-    raise ValueError("Token pattern not found in the list.")
+    # Fallback if pattern is not found in the rendered prompt.
+    return max(len(lst) - 1, 0)
+
+
+def _render_chat_text(tokenizer, messages):
+    """Render chat text with a safe fallback when chat_template is unavailable."""
+    try:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=False
+        )
+    except Exception:
+        # Fallback for tokenizers without chat_template metadata.
+        return "\n".join(f"{m['role']}: {m['content']}" for m in messages)
 
 
 # Parse command-line arguments.
 parser = ArgumentParser()
-parser.add_argument("--model_path", type=str, default="sfairXC/FsfairX-LLaMA3-RM-v0.1", help="Path to the pre-trained model (HuggingFace path or local folder)")
-parser.add_argument("--model_family", type=str, default="llama3", help="Model family (llama3 or gemma2)")
+parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
+parser.add_argument("--model_key", type=str, default=None, help="Model key defined in config.yaml:model:registry.")
+parser.add_argument("--model_path", type=str, default=None, help="Path to the pre-trained model (HuggingFace path or local folder).")
+parser.add_argument("--model_family", type=str, default="llama3", help="Model family (llama3, gemma2, qwen3, auto)")
 parser.add_argument("--dataset_path", type=str, default="RLHFlow/UltraFeedback-preference-standard", help="Path to the dataset (HuggingFace path or local folder)")
 parser.add_argument("--source", default=None, type=str, help="Source filter for the dataset")
 parser.add_argument(
@@ -109,12 +138,41 @@ parser.add_argument("--device", type=int, default=0, help="CUDA device index to 
 parser.add_argument("--seq_len", type=int, default=8192, help="Maximum sequence length for input")
 args = parser.parse_args()  # Parse CLI inputs.
 
+config = load_yaml_config(args.config_path)
+stage2_cfg = config.get("stage_2_prepare", {}) if isinstance(config, dict) else {}
+args = apply_section_overrides(
+    args,
+    stage2_cfg,
+    skip_keys={"model_path", "model_family", "profile", "presets"},
+)
+
+# Resolve dataset settings from the selected stage_2_prepare profile unless CLI overrides them.
+profile = stage2_cfg.get("profile") if isinstance(stage2_cfg, dict) else None
+presets = stage2_cfg.get("presets", {}) if isinstance(stage2_cfg, dict) else {}
+if isinstance(profile, str) and isinstance(presets, dict):
+    selected_preset = presets.get(profile, {})
+    if isinstance(selected_preset, dict):
+        if not cli_has_flag("--dataset_path") and selected_preset.get("dataset_path") is not None:
+            args.dataset_path = selected_preset["dataset_path"]
+        if not cli_has_flag("--dataset_split") and selected_preset.get("dataset_split") is not None:
+            args.dataset_split = selected_preset["dataset_split"]
+        if not cli_has_flag("--source") and selected_preset.get("source") is not None:
+            args.source = selected_preset["source"]
+
+args = resolve_model_from_config(args, config, needs_family=True)
+
+if not args.model_path:
+    print("FATAL ERROR: --model_path is required (or set model.selected/model.registry in config.yaml).")
+    sys.exit(1)
+
 # Validate model family against loaded model config.
 config = AutoConfig.from_pretrained(args.model_path)
 if args.model_family == "llama3":
     assert config.model_type == "llama"
 elif args.model_family == "gemma2":
     assert config.model_type == "gemma2"
+elif args.model_family in {"qwen3", "auto"}:
+    pass
 else:
     raise ValueError(f"Model family {args.model_family} is not supported")
 
@@ -189,7 +247,7 @@ model = AutoModel.from_pretrained(
     device_map=device,
     attn_implementation="flash_attention_2",  # Use FlashAttention v2 when available.
 )
-tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+tokenizer = _load_tokenizer_robust(args.model_path)
 
 # Accumulate pair embeddings and prompt embeddings.
 embeddings = []
@@ -227,13 +285,10 @@ for example in tqdm(ds, desc="Examples"):
 
     for iter_example in [full_chosen, full_rejected]:
         # Render conversation text via the tokenizer chat template.
-        if args.model_path.endswith("FsfairX-LLaMA3-RM-v0.1"):
-            # Match the model card formatting (remove BOS token for this checkpoint).
-            conv_formatted = tokenizer.apply_chat_template(
-                iter_example, tokenize=False, add_generation_prompt=False
-            ).replace(tokenizer.bos_token, "")
-        else:
-            conv_formatted = tokenizer.apply_chat_template(iter_example, tokenize=False)
+        conv_formatted = _render_chat_text(tokenizer, iter_example)
+        # Keep the old Llama behavior without hardcoding a specific checkpoint name.
+        if tokenizer.bos_token and conv_formatted.startswith(tokenizer.bos_token):
+            conv_formatted = conv_formatted[len(tokenizer.bos_token):]
 
         # Tokenize and move tensors to the selected CUDA device.
         conv_tokenized = tokenizer(conv_formatted, return_tensors="pt").to(device)
