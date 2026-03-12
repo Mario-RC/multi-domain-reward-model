@@ -1,6 +1,6 @@
 # Choose the active model profile with `model.selected`.
 model:
-  selected: gemma2
+  selected: llama3
   registry:
     llama3:
       model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
@@ -29,7 +29,7 @@ stage_1_train:
 
 # Choose the data with `stage_2_prepare.profile`.
 stage_2_prepare:
-  profile: reference_data
+  profile: preference_data
   presets:
     preference_data:
       dataset_path: data/stage_2

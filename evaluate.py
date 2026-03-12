@@ -44,9 +44,11 @@ def main() -> None:
     use_cuda = torch.cuda.is_available()
     dtype = torch.bfloat16 if use_cuda else torch.float32
 
+    # `device_map="auto"` requires `_no_split_modules` in custom model classes.
+    # For this project model, load on a single GPU when CUDA is available.
     model = RewardModelWithGating.from_pretrained(
         path,
-        device_map="auto" if use_cuda else None,
+        device_map={"": 0} if use_cuda else None,
         torch_dtype=dtype,
     )
     tokenizer = AutoTokenizer.from_pretrained(path, use_fast=True)

@@ -174,7 +174,7 @@ model:
       model_family: qwen3
 ```
 
-Set `model.selected` in `config.yaml` to choose the active model.
+> Set `model.selected` in `config.yaml` to choose the active model.
 CLI arguments still override `config.yaml` values when explicitly provided.
 
 ### Data Prepare selection via `config.yaml`
@@ -196,7 +196,7 @@ stage_2_prepare:
       dataset_split: filtered
 ```
 
-Set `stage_2_prepare.profile` in `config.yaml` to choose the active profile.
+> Set `stage_2_prepare.profile` in `config.yaml` to choose the active profile.
 CLI arguments still override `config.yaml` values when explicitly provided.
 
 ### Config-driven training commands
@@ -218,14 +218,14 @@ python3 evaluate.py --config_path config.yaml
 python3 predict.py --config_path config.yaml
 ```
 
-Note: Stage 3 packaging supports the configured backbone profiles in `config.yaml` (Llama3, Gemma2, Qwen3-Nemotron). `evaluate.py` and `predict.py` use the same `inference.*` config keys.
+> Note: Stage 3 packaging supports the configured backbone profiles in `config.yaml` (Llama3, Gemma2, Qwen3-Nemotron). `evaluate.py` and `predict.py` use the same `inference.*` config keys.
 
 ## Directory Tree
 
 ```text
 model/
 ├── embeddings/
-│   └── <model_name>/
+│   └── <model_selected>/
 │       ├── <dataset_name>/
 │       │   └── <dataset_name>-00001-of-00001.safetensors
 │       │
@@ -239,12 +239,12 @@ model/
 │           └── UltraFeedback-preference-standard-all.safetensors
 │
 ├── gating_network/
-│   └── gating_network_<model_name>_mo_<dataset_name>_pref_stage_2-all_T10.0_N2000_seed0.pt
+│   └── gating_network_<model_selected>_mo_<dataset_name>_pref_stage_2-all_T10.0_N2000_seed0.pt
 │
 ├── regression_weights/
-│   └── <model_name>_<dataset_name>.pt
+│   └── <model_selected>_<dataset_name>.pt
 │
-└── multi-domain-rm-llama-3-8b-it/
+└── multi-domain-rm-<model_name>/
   ├── config.json
   ├── model-00001-of-0000X.safetensors
   └── ...

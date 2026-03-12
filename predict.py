@@ -36,6 +36,12 @@ class MultiDomainRMPipeline:
     def __init__(self, model_id, device_map="auto", torch_dtype=None, truncation=True, max_length=4096):
         if torch_dtype is None:
             torch_dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+        # `device_map="auto"` is not supported by this custom model class because
+        # Transformers requires `_no_split_modules` for automatic sharding.
+        if device_map == "auto":
+            device_map = {"": 0} if torch.cuda.is_available() else None
+
         self.model = RewardModelWithGating.from_pretrained(
             model_id,
             device_map=device_map,
