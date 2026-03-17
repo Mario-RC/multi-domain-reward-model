@@ -283,12 +283,7 @@ def main():
     parser.add_argument("--preference_dataset_name", type=str, default=None, help="Preference dataset folder name (matches stage-2_prepare output_dataset_name).")
     parser.add_argument("--reference_dataset", type=str, default=None, help="Dataset for verbosity debiasing (defaults to preference_dataset if None)")
     parser.add_argument("--reference_dataset_name", type=str, default=None, help="Reference dataset folder name (matches stage-2_prepare output_dataset_name).")
-    parser.add_argument(
-        "--dataset_split",
-        type=str,
-        default="train",
-        help="Split suffix used by stage-2_prepare outputs (e.g., train, all, val, test).",
-    )
+    parser.add_argument("--dataset_split", type=str, default="train", help="Split suffix used by stage-2_prepare outputs (e.g., train, all, val, test)."    )
     # `--device` is mostly ignored under `torchrun`; `LOCAL_RANK` drives device selection.
     parser.add_argument("--device", type=str, default="0", help="Ignored by torchrun, uses LOCAL_RANK instead")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate for AdamW optimizer")
@@ -583,7 +578,7 @@ def main():
         # Include seed in filename for reproducibility.
         unique_name = (
             f"gating_network_{args.model_name}_mo_{args.multi_objective_dataset_name}_"
-            f"pref_{args.preference_dataset_name}_T{args.temperature:.1f}_N{args.n_steps}_seed{args.seed}"
+            f"pref_{pref_base}_ref_{ref_base}_T{args.temperature:.1f}_N{args.n_steps}_seed{args.seed}"
         )
         save_path = os.path.join(save_dir, f"{unique_name}.pt")
         # Save unwrapped model weights.

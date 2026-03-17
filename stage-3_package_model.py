@@ -40,14 +40,29 @@ def _extract_stage1_weight_tensor(obj) -> torch.Tensor:
     raise TypeError("Stage 1 checkpoint must contain a tensor under 'weight' or 'regression_layer.weight'.")
 
 
-def _build_defaults_from_config(config: dict, model_path: str):
+def _build_defaults_from_config(config: dict, model_path: str, args=None):
     model_name = model_path.split("/")[-1]
     stage2_cfg = config.get("stage_2_train", {}) if isinstance(config, dict) else {}
     stage3_cfg = config.get("stage_3_package", {}) if isinstance(config, dict) else {}
-    multi_objective_dataset_name = str(stage2_cfg.get("multi_objective_dataset_name", "stage_1"))
-    preference_base = stage2_cfg.get("preference_dataset_name") or str(stage2_cfg.get("preference_dataset", "data/Multi-Domain-Data-Preference-Pairs")).split("/")[-1]
-    dataset_split = str(stage2_cfg.get("dataset_split", "train"))
-    preference_dataset_name = f"{preference_base}-{dataset_split}"
+
+    # Resolve dataset names: CLI args > stage_3_package config > stage_2_train config.
+    multi_objective_dataset_name = (
+        (getattr(args, "multi_objective_dataset_name", None) if args else None)
+        or stage3_cfg.get("multi_objective_dataset_name")
+        or str(stage2_cfg.get("multi_objective_dataset_name", "stage_1"))
+    )
+    preference_base = (
+        (getattr(args, "preference_dataset_name", None) if args else None)
+        or stage3_cfg.get("preference_dataset_name")
+        or stage2_cfg.get("preference_dataset_name")
+        or str(stage2_cfg.get("preference_dataset", "data/Multi-Domain-Data-Preference-Pairs")).split("/")[-1]
+    )
+    reference_base = (
+        (getattr(args, "reference_dataset_name", None) if args else None)
+        or stage3_cfg.get("reference_dataset_name")
+        or stage2_cfg.get("reference_dataset_name")
+        or preference_base
+    )
 
     stage1_weights_path = os.path.join(
         "model", "regression_weights", f"{model_name}_{multi_objective_dataset_name}.pt"
@@ -57,7 +72,7 @@ def _build_defaults_from_config(config: dict, model_path: str):
         "gating_network",
         (
             f"gating_network_{model_name}_mo_{multi_objective_dataset_name}_"
-            f"pref_{preference_dataset_name}_T10.0_N2000_seed0.pt"
+            f"pref_{preference_base}_ref_{reference_base}_T10.0_N2000_seed0.pt"
         ),
     )
     model_parent_dir = str(stage3_cfg.get("model_parent_dir", stage3_cfg.get("output_parent_dir", "model")))
@@ -67,6 +82,10 @@ def _build_defaults_from_config(config: dict, model_path: str):
             stage3_cfg.get("final_model_name", f"multi-domain-rm-{model_name.lower()}"),
         )
     )
+    # Append '-no-ref' suffix when reference dataset matches preference dataset
+    # to avoid overwriting a model trained with a separate reference dataset.
+    if reference_base == preference_base and not final_model_name.endswith("-no-ref"):
+        final_model_name = f"{final_model_name}-no-ref"
     output_dir = os.path.join(model_parent_dir, final_model_name)
     return stage1_weights_path, stage2_weights_path, output_dir
 
@@ -79,6 +98,9 @@ def main() -> None:
     parser.add_argument("--stage_1_weights_path", type=str, default=None, help="Optional override for Stage 1 regression weights path.")
     parser.add_argument("--stage_2_weights_path", type=str, default=None, help="Optional override for Stage 2 gating network weights path.")
     parser.add_argument("--model_parent_dir", type=str, default="model", help="Optional output parent directory (e.g., model).")
+    parser.add_argument("--multi_objective_dataset_name", type=str, default=None, help="Multi-objective dataset name from stage-1 (used to locate regression weights and gating network).")
+    parser.add_argument("--preference_dataset_name", type=str, default=None, help="Preference dataset name (without split suffix, e.g., Multi-Domain-Data-Preference-Pairs).")
+    parser.add_argument("--reference_dataset_name", type=str, default=None, help="Reference dataset name (without split suffix, e.g., UltraFeedback-preference-standard).")
     parser.add_argument("--output_model_name", type=str, default=None, help="Optional packaged model directory name.")
     parser.add_argument("--output_dir", type=str, default=None, help="Optional override for final packaged model output directory.")
     parser.add_argument("--model_family", type=str, default=None, help="Model family (llama3, gemma2, qwen3, auto).")
@@ -87,7 +109,7 @@ def main() -> None:
     config = load_yaml_config(args.config_path)
     args = resolve_model_from_config(args, config, needs_family=False)
 
-    inferred_stage1, inferred_stage2, inferred_output = _build_defaults_from_config(config, args.model_path)
+    inferred_stage1, inferred_stage2, inferred_output = _build_defaults_from_config(config, args.model_path, args)
     stage_1_weights_path = args.stage_1_weights_path or inferred_stage1
     stage_2_weights_path = args.stage_2_weights_path or inferred_stage2
     inferred_parent = os.path.dirname(inferred_output)
@@ -95,6 +117,15 @@ def main() -> None:
     model_parent_dir = args.model_parent_dir or inferred_parent
     output_model_name = args.output_model_name or inferred_name
     output_dir = args.output_dir or os.path.join(model_parent_dir, output_model_name)
+
+    print("=" * 60)
+    print("Stage 3: Packaging model")
+    print("=" * 60)
+    print(f"  Base model:          {args.model_path}")
+    print(f"  Stage 1 weights:     {stage_1_weights_path}")
+    print(f"  Stage 2 weights:     {stage_2_weights_path}")
+    print(f"  Output directory:    {output_dir}")
+    print("=" * 60)
 
     print("Loading configuration and tokenizer...")
     trust_remote_code = _requires_remote_code(args.model_path)

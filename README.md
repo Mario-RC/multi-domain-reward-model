@@ -154,6 +154,9 @@ python3 stage-2_train.py \
 python3 stage-3_package_model.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
   --model_family llama3 \
+  --multi_objective_dataset_name Multi-Domain-Data-Scoring \
+  --preference_dataset_name Multi-Domain-Data-Preference-Pairs \
+  --reference_dataset_name UltraFeedback-preference-standard \
   --output_model_name multi-domain-rm-llama-3-8b-it
 ```
 
@@ -273,7 +276,7 @@ model/
 │           └── <reference_dataset_name>-<split>.safetensors
 │
 ├── gating_network/
-│   └── gating_network_<model_selected>_mo_<multi_objective_dataset_name>_pref_<preference_dataset_name>-<split>_T10.0_N2000_seed0.pt
+│   └── gating_network_<model_selected>_mo_<multi_objective_dataset_name>_pref_<preference_dataset_name>_ref_<reference_dataset_name>_T10.0_N2000_seed0.pt
 │
 ├── regression_weights/
 │   └── <model_selected>_<multi_objective_dataset_name>.pt

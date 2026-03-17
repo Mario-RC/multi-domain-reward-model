@@ -30,42 +30,12 @@ selects the best regularization, and saves the resulting weights.
 parser = ArgumentParser(description="Stage 1 Train: Linear probing on precomputed embeddings")
 parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
 parser.add_argument("--model_key", type=str, default=None, help="Model key defined in config.yaml:model:registry.")
-parser.add_argument(
-    "--model_path",
-    type=str,
-    default="sfairXC/FsfairX-LLaMA3-RM-v0.1",
-    help="Path or HF ID of the base reward model (used for naming output).",
-)
-parser.add_argument(
-    "--multi_objective_dataset_name",
-    type=str,
-    default=None,
-    help="Dataset base name produced by stage-1_prepare (e.g., 'stage_1').",
-)
-parser.add_argument(
-    "--dataset_split",
-    type=str,
-    default="train",
-    help="Split tag used by stage-1_prepare for folder/filename suffix (e.g., train, all).",
-)
-parser.add_argument(
-    "--embeddings_dir",
-    type=str,
-    default=None,
-    help="Optional override for the embeddings root. Defaults to ./model/embeddings/.",
-)
-parser.add_argument(
-    "--output_dir",
-    type=str,
-    default=None,
-    help="Optional override for saving regression weights. Defaults to ./model/regression_weights/.",
-)
-parser.add_argument(
-    "--model_family",
-    type=str,
-    default="llama3",
-    help="Model family (llama3, gemma2, qwen3, auto).",
-)
+parser.add_argument("--model_path", type=str, default=None, help="Path or HF ID of the base reward model (used for naming output).")
+parser.add_argument("--multi_objective_dataset_name", type=str, default=None, help="Dataset base name produced by stage-1_prepare (e.g., 'stage_1').")
+parser.add_argument("--dataset_split", type=str, default="train", help="Split tag used by stage-1_prepare for folder/filename suffix (e.g., train, all).")
+parser.add_argument("--embeddings_dir", type=str, default=None, help="Optional override for the embeddings root. Defaults to ./model/embeddings/.")
+parser.add_argument("--output_dir", type=str, default=None, help="Optional override for saving regression weights. Defaults to ./model/regression_weights/.")
+parser.add_argument("--model_family", type=str, default="llama3", help="Model family (llama3, gemma2, qwen3, auto).")
 args = parser.parse_args()
 
 config = load_yaml_config(args.config_path)

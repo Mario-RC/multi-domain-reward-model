@@ -27,13 +27,13 @@ def apply_selected_model_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(selected_model_cfg, dict):
         return config
 
-    # Project-level packaged model naming by profile.
+    # Project-level output model naming by profile.
     profile_name_map = {
         "llama3": "multi-domain-rm-llama-3-8b-it",
         "gemma2": "multi-domain-rm-gemma-2-9b-it",
         "qwen3": "multi-domain-rm-qwen-3-8b-it",
     }
-    target_model_name = selected_model_cfg.get("packaged_model_name") or profile_name_map.get(selected)
+    target_model_name = selected_model_cfg.get("output_model_name") or profile_name_map.get(selected)
     if not target_model_name:
         return config
 
@@ -41,13 +41,15 @@ def apply_selected_model_defaults(config: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(stage3_cfg, dict):
         stage3_cfg = {}
         config["stage_3_package"] = stage3_cfg
-    stage3_cfg["output_model_name"] = str(target_model_name)
+    if not stage3_cfg.get("output_model_name"):
+        stage3_cfg["output_model_name"] = str(target_model_name)
 
     inference_cfg = config.get("inference")
     if not isinstance(inference_cfg, dict):
         inference_cfg = {}
         config["inference"] = inference_cfg
-    inference_cfg["model_name"] = str(target_model_name)
+    if not inference_cfg.get("model_name"):
+        inference_cfg["model_name"] = str(target_model_name)
 
     return config
 

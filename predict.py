@@ -25,12 +25,16 @@ def _resolve_inference_model_path(
 
     if cli_model_parent_dir or cli_model_name:
         model_parent_dir = str(cli_model_parent_dir or inference_cfg.get("model_parent_dir", "model"))
-        model_name = str(cli_model_name or inference_cfg.get("model_name", "multi-domain-rm-llama-3-8b-it"))
-        return f"./{model_parent_dir}/{model_name}"
+        model_name = cli_model_name or inference_cfg.get("model_name")
+        if not model_name:
+            raise ValueError("model_name must be provided via --model_name or config.yaml inference.model_name")
+        return f"./{model_parent_dir}/{str(model_name)}"
 
+    model_name = inference_cfg.get("model_name")
+    if not model_name:
+        raise ValueError("model_name must be provided via --model_name or config.yaml inference.model_name")
     model_parent_dir = str(inference_cfg.get("model_parent_dir", "model"))
-    model_name = str(inference_cfg.get("model_name", "multi-domain-rm-llama-3-8b-it"))
-    return f"./{model_parent_dir}/{model_name}"
+    return f"./{model_parent_dir}/{str(model_name)}"
 
 class MultiDomainRMPipeline:
     def __init__(self, model_id, device_map="auto", torch_dtype=None, truncation=True, max_length=4096):
@@ -64,9 +68,13 @@ class MultiDomainRMPipeline:
             truncation=self.truncation,
             max_length=self.max_length,
         )
-        input_ids = encoding["input_ids"].to(self.device)
-        attention_mask = encoding.get("attention_mask")
-        attention_mask = attention_mask.to(self.device) if attention_mask is not None else None
+        if isinstance(encoding, torch.Tensor):
+            input_ids = encoding.to(self.device)
+            attention_mask = None
+        else:
+            input_ids = encoding["input_ids"].to(self.device)
+            attention_mask = encoding.get("attention_mask")
+            attention_mask = attention_mask.to(self.device) if attention_mask is not None else None
         with torch.no_grad():
             output = self.model(input_ids=input_ids, attention_mask=attention_mask)
             score = output.score.float().item()

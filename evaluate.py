@@ -1,9 +1,43 @@
+"""Evaluate a packaged multi-domain reward model on test data.
+
+Two evaluation modes:
+  1. Scoring  – per-attribute regression quality (Multi-Domain-Data-Scoring)
+  2. Preference – chosen-vs-rejected accuracy  (Multi-Domain-Data-Preference-Pairs)
+"""
+
+import json
+import os
+
+import numpy as np
 import torch
 from argparse import ArgumentParser
+from scipy.stats import pearsonr, spearmanr
+from tqdm import tqdm
 from transformers import AutoTokenizer
+
 from modeling_custom import RewardModelWithGating
 from config_utils import load_yaml_config
 
+ATTRIBUTES = [
+    "co_discourse_structure", "co_logical_consistency", "co_mutual_grounding",
+    "co_overall_coherence_score", "co_temporal_causal_coherence", "co_topic_coherence",
+    "cs_causality", "cs_coherence", "cs_consistency", "cs_desire", "cs_empathy", "cs_reaction",
+    "em_emotional_awareness", "em_emotional_validation", "em_helpful_response",
+    "em_overall_empathy_score", "em_perspective_taking", "em_supportive_engagement",
+    "mu_coherence", "mu_cultural_specificity", "mu_cultural_value", "mu_empathy", "mu_naturalness",
+]
+
+DOMAIN_PREFIXES = {
+    "coherence": "co_",
+    "commonsense": "cs_",
+    "empathy": "em_",
+    "multicultural": "mu_",
+}
+
+
+# ---------------------------------------------------------------------------
+# Model path resolution
+# ---------------------------------------------------------------------------
 
 def _resolve_inference_model_path(
     config: dict,
@@ -24,31 +58,306 @@ def _resolve_inference_model_path(
 
     if cli_model_parent_dir or cli_model_name:
         model_parent_dir = str(cli_model_parent_dir or inference_cfg.get("model_parent_dir", "model"))
-        model_name = str(cli_model_name or inference_cfg.get("model_name", "multi-domain-rm-llama-3-8b-it"))
-        return f"./{model_parent_dir}/{model_name}"
+        model_name = cli_model_name or inference_cfg.get("model_name")
+        if not model_name:
+            raise ValueError("model_name must be provided via --model_name or config.yaml inference.model_name")
+        return f"./{model_parent_dir}/{str(model_name)}"
 
+    model_name = inference_cfg.get("model_name")
+    if not model_name:
+        raise ValueError("model_name must be provided via --model_name or config.yaml inference.model_name")
     model_parent_dir = str(inference_cfg.get("model_parent_dir", "model"))
-    model_name = str(inference_cfg.get("model_name", "multi-domain-rm-llama-3-8b-it"))
-    return f"./{model_parent_dir}/{model_name}"
+    return f"./{model_parent_dir}/{str(model_name)}"
+
+
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
+
+def _resolve_jsonl_path(path: str) -> str:
+    """Return *path* if it exists, otherwise try appending .jsonl."""
+    if os.path.isfile(path):
+        return path
+    candidate = path + ".jsonl"
+    if os.path.isfile(candidate):
+        return candidate
+    raise FileNotFoundError(f"Dataset not found: {path} (also tried {candidate})")
+
+
+def load_jsonl_test(path: str) -> list[dict]:
+    """Load all records whose split == 'test' from a JSONL file."""
+    path = _resolve_jsonl_path(path)
+    records: list[dict] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            split = record.get("split") or record.get("metadata", {}).get("split")
+            if split == "test":
+                records.append(record)
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Inference helper
+# ---------------------------------------------------------------------------
+
+@torch.no_grad()
+def _score_messages(model, tokenizer, messages, device, max_length):
+    encoding = tokenizer.apply_chat_template(
+        messages, return_tensors="pt", padding=True, truncation=True, max_length=max_length,
+    )
+    if isinstance(encoding, torch.Tensor):
+        input_ids = encoding.to(device)
+        attention_mask = None
+    else:
+        # BatchEncoding or dict-like
+        input_ids = encoding["input_ids"].to(device)
+        attention_mask = encoding.get("attention_mask")
+        attention_mask = attention_mask.to(device) if attention_mask is not None else None
+    return model(input_ids=input_ids, attention_mask=attention_mask)
+
+
+# ---------------------------------------------------------------------------
+# Scoring evaluation  (Multi-Domain-Data-Scoring)
+# ---------------------------------------------------------------------------
+
+def evaluate_scoring(model, tokenizer, data_path, device, max_length, max_samples):
+    records = load_jsonl_test(data_path)
+    if not records:
+        print(f"No test records found in {data_path}")
+        return
+    if max_samples and max_samples < len(records):
+        records = records[:max_samples]
+
+    print(f"\n{'=' * 70}")
+    print(f"  SCORING EVALUATION — {len(records)} test samples")
+    print(f"{'=' * 70}")
+
+    # Per-attribute collectors (records only have scores for their domain).
+    attr_pred: dict[str, list[float]] = {a: [] for a in ATTRIBUTES}
+    attr_true: dict[str, list[float]] = {a: [] for a in ATTRIBUTES}
+    all_scores: list[float] = []
+    evaluated = 0
+    skipped = 0
+
+    for record in tqdm(records, desc="Scoring"):
+        messages = record.get("messages")
+        scores = record.get("scores", {})
+        if not messages or not scores:
+            skipped += 1
+            continue
+
+        # Require at least one valid attribute score.
+        valid_attrs = [(i, a) for i, a in enumerate(ATTRIBUTES) if scores.get(a) is not None]
+        if not valid_attrs:
+            skipped += 1
+            continue
+
+        try:
+            out = _score_messages(model, tokenizer, messages, device, max_length)
+            rewards = out.rewards.cpu().float().squeeze(0).numpy()
+            all_scores.append(out.score.cpu().float().item())
+            for idx, attr in valid_attrs:
+                attr_pred[attr].append(float(rewards[idx]))
+                attr_true[attr].append(float(scores[attr]))
+            evaluated += 1
+        except Exception:
+            skipped += 1
+            continue
+
+    if skipped:
+        print(f"  Skipped: {skipped}")
+    print(f"  Evaluated: {evaluated}")
+
+    if evaluated == 0:
+        print("  No valid samples evaluated.")
+        return
+
+    # Per-attribute metrics
+    header = f"  {'Attribute':<42} {'N':>6} {'MSE':>8} {'Pearson':>8} {'Spearman':>9}"
+    print(f"\n{header}")
+    print(f"  {'-' * 78}")
+
+    mses, pearsons, spearmans = [], [], []
+    domain_metrics: dict[str, list[tuple[float, float, float]]] = {}
+
+    for attr in ATTRIBUTES:
+        p = np.array(attr_pred[attr])
+        t = np.array(attr_true[attr])
+        n = len(p)
+        if n < 2:
+            print(f"  {attr:<42} {n:>6}      —        —         —")
+            continue
+        mse = float(np.mean((p - t) ** 2))
+        r_p = pearsonr(p, t).statistic if np.std(p) > 0 and np.std(t) > 0 else 0.0
+        r_s = spearmanr(p, t).statistic if np.std(p) > 0 and np.std(t) > 0 else 0.0
+        mses.append(mse)
+        pearsons.append(r_p)
+        spearmans.append(r_s)
+        print(f"  {attr:<42} {n:>6} {mse:>8.4f} {r_p:>8.4f} {r_s:>9.4f}")
+
+        for domain_name, prefix in DOMAIN_PREFIXES.items():
+            if attr.startswith(prefix):
+                domain_metrics.setdefault(domain_name, []).append((mse, r_p, r_s))
+
+    if mses:
+        print(f"  {'-' * 78}")
+        print(f"  {'AVERAGE':<42} {'':>6} {np.mean(mses):>8.4f} {np.mean(pearsons):>8.4f} {np.mean(spearmans):>9.4f}")
+
+    # Per-domain summary
+    if domain_metrics:
+        print(f"\n  {'Domain':<20} {'MSE':>8} {'Pearson':>8} {'Spearman':>9}")
+        print(f"  {'-' * 49}")
+        for domain_name in sorted(domain_metrics):
+            vals = domain_metrics[domain_name]
+            dm = np.mean([v[0] for v in vals])
+            dp = np.mean([v[1] for v in vals])
+            ds = np.mean([v[2] for v in vals])
+            print(f"  {domain_name:<20} {dm:>8.4f} {dp:>8.4f} {ds:>9.4f}")
+
+    # Global score distribution
+    scores_arr = np.array(all_scores)
+    print(f"\n  Global score stats — mean: {scores_arr.mean():.4f}  std: {scores_arr.std():.4f}"
+          f"  min: {scores_arr.min():.4f}  max: {scores_arr.max():.4f}")
+
+
+# ---------------------------------------------------------------------------
+# Preference evaluation  (Multi-Domain-Data-Preference-Pairs)
+# ---------------------------------------------------------------------------
+
+def evaluate_preference(model, tokenizer, data_path, device, max_length, max_samples):
+    records = load_jsonl_test(data_path)
+    if not records:
+        print(f"No test records found in {data_path}")
+        return
+    if max_samples and max_samples < len(records):
+        records = records[:max_samples]
+
+    print(f"\n{'=' * 70}")
+    print(f"  PREFERENCE EVALUATION — {len(records)} test pairs")
+    print(f"{'=' * 70}")
+
+    correct = 0
+    ties = 0
+    total = 0
+    domain_stats: dict[str, list[int, int, int]] = {}
+    difficulty_stats: dict[str, list[int, int, int]] = {}
+    skipped = 0
+    margins: list[float] = []
+
+    for record in tqdm(records, desc="Preference"):
+        messages = record.get("messages", [])
+        chosen = record.get("chosen")
+        rejected = record.get("rejected")
+        if not messages or not chosen or not rejected:
+            skipped += 1
+            continue
+
+        # chosen / rejected are lists of message dicts
+        chosen_msgs = messages + (chosen if isinstance(chosen, list) else [{"role": "assistant", "content": chosen}])
+        rejected_msgs = messages + (rejected if isinstance(rejected, list) else [{"role": "assistant", "content": rejected}])
+
+        try:
+            c_score = _score_messages(model, tokenizer, chosen_msgs, device, max_length).score.cpu().float().item()
+            r_score = _score_messages(model, tokenizer, rejected_msgs, device, max_length).score.cpu().float().item()
+        except Exception:
+            skipped += 1
+            continue
+
+        is_correct = c_score > r_score
+        is_tie = c_score == r_score
+        correct += int(is_correct)
+        ties += int(is_tie)
+        total += 1
+        margins.append(c_score - r_score)
+
+        metadata = record.get("metadata", {})
+        domain = metadata.get("domain", "unknown")
+        difficulty = metadata.get("difficulty", "unknown")
+
+        for bucket, key in [(domain_stats, domain), (difficulty_stats, difficulty)]:
+            if key not in bucket:
+                bucket[key] = [0, 0, 0]
+            bucket[key][0] += int(is_correct)
+            bucket[key][1] += 1
+            bucket[key][2] += int(is_tie)
+
+    if skipped:
+        print(f"  Skipped: {skipped}")
+
+    if total == 0:
+        print("  No valid pairs evaluated.")
+        return
+
+    margins_arr = np.array(margins)
+    print(f"\n  Overall accuracy: {correct}/{total}  ({100 * correct / total:.2f}%)")
+    print(f"  Ties (chosen == rejected): {ties}")
+    print(f"  Margin stats — mean: {margins_arr.mean():.4f}  std: {margins_arr.std():.4f}")
+
+    # Per-domain
+    if domain_stats:
+        print(f"\n  {'Domain':<25} {'Accuracy':>10} {'Correct':>9} {'Total':>7} {'Ties':>6}")
+        print(f"  {'-' * 61}")
+        for d in sorted(domain_stats):
+            c, t, ti = domain_stats[d]
+            print(f"  {d:<25} {100 * c / t:>9.2f}% {c:>9} {t:>7} {ti:>6}")
+
+    # Per-difficulty
+    if difficulty_stats:
+        print(f"\n  {'Difficulty':<25} {'Accuracy':>10} {'Correct':>9} {'Total':>7} {'Ties':>6}")
+        print(f"  {'-' * 61}")
+        for d in sorted(difficulty_stats):
+            c, t, ti = difficulty_stats[d]
+            print(f"  {d:<25} {100 * c / t:>9.2f}% {c:>9} {t:>7} {ti:>6}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = ArgumentParser(description="Evaluate packaged reward model.")
-    parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
-    parser.add_argument("--model_path", type=str, default=None, help="Optional override for packaged model path.")
-    parser.add_argument("--model_parent_dir", type=str, default="model", help="Optional packaged model parent directory.")
-    parser.add_argument("--model_name", type=str, default=None, help="Optional packaged model directory name.")
-    parser.add_argument("--model_family", type=str, default=None, help="Model family (llama3, gemma2, qwen3, auto).")
-    args = parser.parse_args()
+    parser = ArgumentParser(description="Evaluate packaged multi-domain reward model on test data.")
 
+    # Model
+    parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
+    parser.add_argument("--model_path", type=str, default=None, help="Override for packaged model path.")
+    parser.add_argument("--model_parent_dir", type=str, default="model", help="Packaged model parent directory.")
+    parser.add_argument("--model_name", type=str, default=None, help="Packaged model directory name.")
+    parser.add_argument("--model_family", type=str, default=None, help="Model family (llama3, gemma2, qwen3, auto).")
+
+    # Data
+    parser.add_argument("--scoring_data_path", type=str, default=None, help="Path to Multi-Domain-Data-Scoring[.jsonl]. Default: from config or data/Multi-Domain-Data-Scoring.")
+    parser.add_argument("--preference_data_path", type=str, default=None, help="Path to Multi-Domain-Data-Preference-Pairs[.jsonl]. Default: from config or data/Multi-Domain-Data-Preference-Pairs.")
+
+    # Eval control
+    parser.add_argument("--max_length", type=int, default=4096, help="Max sequence length for tokenization.")
+    parser.add_argument("--max_samples", type=int, default=None, help="Cap per evaluation (for quick debugging).")
+    parser.add_argument("--skip_scoring", action="store_true", help="Skip scoring evaluation.")
+    parser.add_argument("--skip_preference", action="store_true", help="Skip preference evaluation.")
+
+    args = parser.parse_args()
     config = load_yaml_config(args.config_path)
+
+    # Resolve data paths from config fallbacks
+    if not args.scoring_data_path:
+        s1_cfg = config.get("stage_1_prepare", {})
+        args.scoring_data_path = s1_cfg.get("dataset_path", "data/Multi-Domain-Data-Scoring")
+
+    if not args.preference_data_path:
+        s2_cfg = config.get("stage_2_prepare", {})
+        presets = s2_cfg.get("presets", {})
+        pref_preset = presets.get("preference_data", {})
+        args.preference_data_path = pref_preset.get("path", "data/Multi-Domain-Data-Preference-Pairs")
+
+    # Load model
     path = _resolve_inference_model_path(config, args.model_path, args.model_parent_dir, args.model_name)
     use_cuda = torch.cuda.is_available()
     dtype = torch.bfloat16 if use_cuda else torch.float32
 
     print(f"Loading model: {path}")
-
-    # `device_map="auto"` requires `_no_split_modules` in custom model classes.
-    # For this project model, load on a single GPU when CUDA is available.
     model = RewardModelWithGating.from_pretrained(
         path,
         device_map={"": 0} if use_cuda else None,
@@ -56,62 +365,18 @@ def main() -> None:
     )
     tokenizer = AutoTokenizer.from_pretrained(path, use_fast=True)
     model.eval()
-
     device = next(model.parameters()).device
 
-    # Example prompt/response to test empathy and multicultural sensitivity.
-    prompt = "I just moved to Japan for work and I feel overwhelmed and lonely. Today I accidentally offended my manager because I did not know a local custom."
-    response = "I am sorry you are going through this. Feeling overwhelmed after moving to a different culture is completely normal. Etiquette mistakes happen often, especially early on. If you want, we can walk through what happened with your manager and draft a respectful way to address it."
+    # Run evaluations
+    if not args.skip_scoring:
+        evaluate_scoring(model, tokenizer, args.scoring_data_path, device, args.max_length, args.max_samples)
 
-    messages = [{"role": "user", "content": prompt},
-                {"role": "assistant", "content": response}]
-    encoding = tokenizer.apply_chat_template(messages, return_tensors="pt", padding=True)
-    input_ids = encoding["input_ids"].to(device)
-    attention_mask = encoding.get("attention_mask")
-    attention_mask = attention_mask.to(device) if attention_mask is not None else None
+    if not args.skip_preference:
+        evaluate_preference(model, tokenizer, args.preference_data_path, device, args.max_length, args.max_samples)
 
-    with torch.no_grad():
-        output = model(input_ids=input_ids, attention_mask=attention_mask)
-        # Raw rewards for each of the 23 objectives.
-        multi_obj_rewards = output.rewards.cpu().float()
-        # Gating output (objective importance conditioned on the prompt).
-        gating_output = output.gating_output.cpu().float()
-        # Final preference score.
-        preference_score = output.score.cpu().float()
-
-    obj_transform = model.reward_transform_matrix.data.cpu().float()
-    multi_obj_coeffs = gating_output @ obj_transform.T
-
-    # Ensure the decomposition is numerically consistent (allowing small mixed-precision error).
-    reconstructed_score = torch.sum(multi_obj_rewards * multi_obj_coeffs, dim=1)
-    if not torch.allclose(reconstructed_score, preference_score, atol=1e-2, rtol=1e-3):
-        max_abs_diff = torch.max(torch.abs(reconstructed_score - preference_score)).item()
-        print(f"Warning: score decomposition mismatch (max abs diff = {max_abs_diff:.6f}).")
-
-    K = 3
-    top_obj_dims = torch.argsort(torch.abs(multi_obj_coeffs), dim=1, descending=True)[:, :K]
-    top_obj_coeffs = torch.gather(multi_obj_coeffs, dim=1, index=top_obj_dims)
-
-    # The order must match Stage 1 training exactly.
-    attributes = [
-        'co_discourse_structure', 'co_logical_consistency', 'co_mutual_grounding',
-        'co_overall_coherence_score', 'co_temporal_causal_coherence', 'co_topic_coherence',
-        'cs_causality', 'cs_coherence', 'cs_consistency', 'cs_desire', 'cs_empathy', 'cs_reaction',
-        'em_emotional_awareness', 'em_emotional_validation', 'em_helpful_response',
-        'em_overall_empathy_score', 'em_perspective_taking', 'em_supportive_engagement',
-        'mu_coherence', 'mu_cultural_specificity', 'mu_cultural_value', 'mu_empathy', 'mu_naturalness'
-    ]
-
-    print("\n--- MULTI-DOMAIN EVALUATION ---")
-    print(f"Global Preference Score: {preference_score.item():.5f}")
-    print(f"\nTop {K} attributes driving this decision:")
-
-    example_index = 0
-    for i in range(K):
-        attribute_idx = int(top_obj_dims[example_index, i].item())
-        attribute = attributes[attribute_idx]
-        coeff = top_obj_coeffs[example_index, i].item()
-        print(f" - {attribute}: {round(coeff, 5)}")
+    print(f"\n{'=' * 70}")
+    print("  Done.")
+    print(f"{'=' * 70}")
 
 
 if __name__ == "__main__":
