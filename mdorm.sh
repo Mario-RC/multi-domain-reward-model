@@ -63,6 +63,9 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
 CUDA_VISIBLE_DEVICES=0 python3 stage-3_package_model.py \
 --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
 --model_family llama3 \
+--multi_objective_dataset_name Multi-Domain-Data-Scoring \
+--preference_dataset_name Multi-Domain-Data-Preference-Pairs \
+--reference_dataset_name UltraFeedback-preference-standard \
 --output_model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################

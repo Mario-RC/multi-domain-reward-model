@@ -60,7 +60,6 @@ def _build_defaults_from_config(config: dict, model_path: str, args=None):
     reference_base = (
         (getattr(args, "reference_dataset_name", None) if args else None)
         or stage3_cfg.get("reference_dataset_name")
-        or stage2_cfg.get("reference_dataset_name")
         or preference_base
     )
 
