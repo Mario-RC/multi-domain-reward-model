@@ -1,11 +1,12 @@
 # stage-3_package_model.py
 
 import os
+import sys
 import torch
 from argparse import ArgumentParser
 from transformers import AutoConfig, AutoTokenizer
 from modeling_custom import RewardModelWithGating
-from config_utils import load_yaml_config, resolve_model_from_config
+from config_utils import load_yaml_config
 
 
 def _requires_remote_code(model_path: str) -> bool:
@@ -55,7 +56,6 @@ def _build_defaults_from_config(config: dict, model_path: str, args=None):
         (getattr(args, "preference_dataset_name", None) if args else None)
         or stage3_cfg.get("preference_dataset_name")
         or stage2_cfg.get("preference_dataset_name")
-        or str(stage2_cfg.get("preference_dataset", "data/Multi-Domain-Data-Preference-Pairs")).split("/")[-1]
     )
     reference_base = (
         (getattr(args, "reference_dataset_name", None) if args else None)
@@ -76,16 +76,11 @@ def _build_defaults_from_config(config: dict, model_path: str, args=None):
         ),
     )
     model_parent_dir = str(stage3_cfg.get("model_parent_dir", stage3_cfg.get("output_parent_dir", "model")))
-    final_model_name = str(
-        stage3_cfg.get(
-            "output_model_name",
-            stage3_cfg.get("final_model_name", f"multi-domain-rm-{model_name.lower()}"),
-        )
+    final_model_name = (
+        stage3_cfg.get("output_model_name")
+        or stage3_cfg.get("final_model_name")
+        or f"multi-domain-rm-{model_name.lower()}"
     )
-    # Append '-no-ref' suffix when reference dataset matches preference dataset
-    # to avoid overwriting a model trained with a separate reference dataset.
-    if reference_base == preference_base and not final_model_name.endswith("-no-ref"):
-        final_model_name = f"{final_model_name}-no-ref"
     output_dir = os.path.join(model_parent_dir, final_model_name)
     return stage1_weights_path, stage2_weights_path, output_dir
 
@@ -107,7 +102,9 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_yaml_config(args.config_path)
-    args = resolve_model_from_config(args, config, needs_family=False)
+    stage3_cfg = config.get("stage_3_package", {}) or {}
+    if not args.model_path:
+        args.model_path = stage3_cfg.get("model_path")
 
     inferred_stage1, inferred_stage2, inferred_output = _build_defaults_from_config(config, args.model_path, args)
     stage_1_weights_path = args.stage_1_weights_path or inferred_stage1
@@ -116,6 +113,9 @@ def main() -> None:
     inferred_name = os.path.basename(inferred_output)
     model_parent_dir = args.model_parent_dir or inferred_parent
     output_model_name = args.output_model_name or inferred_name
+    if not output_model_name:
+        print("FATAL ERROR: --output_model_name is required (set stage_3_package.output_model_name in config.yaml or pass --output_model_name).")
+        sys.exit(1)
     output_dir = args.output_dir or os.path.join(model_parent_dir, output_model_name)
 
     print("=" * 60)

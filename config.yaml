@@ -1,22 +1,25 @@
-# Choose the active model profile with `model.selected`.
-model:
-  selected: llama3
-  registry:
-    llama3:
-      model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
-      model_family: llama3
-      output_model_name: multi-domain-rm-llama-3-8b-it
-    gemma2:
-      model_path: sfairXC/FsfairX-Gemma2-RM-v0.1
-      model_family: gemma2
-      output_model_name: multi-domain-rm-gemma-2-9b-it
-    qwen3:
-      model_path: nvidia/Qwen3-Nemotron-8B-BRRM
-      model_family: qwen3
-      output_model_name: multi-domain-rm-qwen-3-8b-it
+# ================================================================================
+#  Multi-Domain Reward Model Pipeline — Configuration
+# ================================================================================
+#  Change model_path and model_family in each stage before running.
+#
+#  ┌──────────────────────────────────────────────────────────────────────────┐
+#  │ Available models                                                         │
+#  ├─────────┬────────────────────────────────┬───────────────────────────────┤
+#  │ Family  │ model_path                     │ output_model_name             │
+#  ├─────────┼────────────────────────────────┼───────────────────────────────┤
+#  │ llama3  │ sfairXC/FsfairX-LLaMA3-RM-v0.1 │ multi-domain-rm-llama-3-8b-it │
+#  │ gemma2  │ sfairXC/FsfairX-Gemma2-RM-v0.1 │ multi-domain-rm-gemma-2-9b-it │
+#  │ qwen3   │ nvidia/Qwen3-Nemotron-8B-BRRM  │ multi-domain-rm-qwen-3-8b-it  │
+#  └─────────┴────────────────────────────────┴───────────────────────────────┘
+# ================================================================================
 
+
+# --- Stage 1: Multi-objective regression ---
 
 stage_1_prepare:
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  model_family: llama3
   dataset_path: data/Multi-Domain-Data-Scoring
   output_dataset_name: Multi-Domain-Data-Scoring
   dataset_split: train
@@ -24,45 +27,47 @@ stage_1_prepare:
   shard_idx: 1
   device: 0
 
-
 stage_1_train:
-  multi_objective_dataset_name: Multi-Domain-Data-Scoring # Must match output_dataset_name from stage_1_prepare.
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  model_family: llama3
+  multi_objective_dataset_name: Multi-Domain-Data-Scoring
   dataset_split: train
   embeddings_dir: null
   output_dir: null
 
 
-# Choose the data with `stage_2_prepare.profile`.
+# --- Stage 2: Gating network ---
+#
+#  Run stage_2_prepare once per dataset, changing dataset_path and
+#  output_dataset_name each time:
+#
+#  Dataset         │ dataset_path                              │ output_dataset_name                │ dataset_split
+#  ────────────────┼───────────────────────────────────────────┼────────────────────────────────────┼──────────────
+#  multi-objective │ data/Multi-Domain-Data-Scoring            │ Multi-Domain-Data-Scoring          │ train
+#  preference      │ data/Multi-Domain-Data-Preference-Pairs   │ Multi-Domain-Data-Preference-Pairs │ train
+#  reference       │ RLHFlow/UltraFeedback-preference-standard │ UltraFeedback-preference-standard  │ train
+#  reward-bench    │ allenai/reward-bench                      │ reward-bench                       │ filtered
+
 stage_2_prepare:
-  profile: preference_data
-  presets:
-    preference_data:
-      dataset_path: data/Multi-Domain-Data-Preference-Pairs
-      dataset_split: train
-      output_dataset_name: Multi-Domain-Data-Preference-Pairs
-    reference_data:
-      dataset_path: RLHFlow/UltraFeedback-preference-standard
-      dataset_split: train
-      output_dataset_name: UltraFeedback-preference-standard
-    reward-bench_eval_data:
-      dataset_path: allenai/reward-bench
-      dataset_split: filtered
-      output_dataset_name: reward-bench
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  model_family: llama3
+  dataset_path: data/Multi-Domain-Data-Preference-Pairs
+  output_dataset_name: Multi-Domain-Data-Preference-Pairs
+  dataset_split: train
   source: null
   n_shards: 1
   shard_idx: 1
   device: 0
   seq_len: 8192
-  output_dataset_name: null
-
 
 stage_2_train:
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  model_family: llama3
   multi_objective_dataset_name: Multi-Domain-Data-Scoring
-  preference_dataset: data/Multi-Domain-Data-Preference-Pairs
-  reference_dataset: RLHFlow/UltraFeedback-preference-standard
-  dataset_split: train
   preference_dataset_name: Multi-Domain-Data-Preference-Pairs
-  reference_dataset_name: UltraFeedback-preference-standard
+  reference_dataset_name: UltraFeedback-preference-standard  # null = use preference_dataset_name
+  dataset_split: train
+  eval_reward_bench: true
   device: "0"
   learning_rate: 0.001
   weight_decay: 0.0
@@ -70,7 +75,6 @@ stage_2_train:
   batch_size: 1024
   verbosity_dim: 4
   corr_threshold: 0.03
-  eval_reward_bench: true
   logit_scale: 1.0
   temperature: 10.0
   n_hidden: 3
@@ -80,16 +84,21 @@ stage_2_train:
   seed: 0
 
 
+# --- Stage 3: Package final model ---
+
 stage_3_package:
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  model_family: llama3
   multi_objective_dataset_name: Multi-Domain-Data-Scoring
   preference_dataset_name: Multi-Domain-Data-Preference-Pairs
   reference_dataset_name: UltraFeedback-preference-standard
   model_parent_dir: model
-  output_model_name: null # Auto-set from model.selected using output_model_name.
+  output_model_name: multi-domain-rm-llama-3-8b-it
 
 
-# Inference target model (evaluate and predict).
+# --- Inference (evaluate and predict) ---
+
 inference:
   model_parent_dir: model
-  model_name: null # Auto-set from model.selected using output_model_name.
+  model_name: multi-domain-rm-llama-3-8b-it
   model_path: null

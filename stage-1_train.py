@@ -14,7 +14,7 @@ from safetensors.torch import load_file
 from argparse import ArgumentParser
 import traceback  # For error logging
 from datetime import datetime
-from config_utils import load_yaml_config, apply_section_overrides, resolve_model_from_config
+from config_utils import load_yaml_config, apply_section_overrides
 
 print(f"Stage 1 Train started at {datetime.now().isoformat()}")
 
@@ -39,8 +39,7 @@ parser.add_argument("--model_family", type=str, default="llama3", help="Model fa
 args = parser.parse_args()
 
 config = load_yaml_config(args.config_path)
-args = apply_section_overrides(args, config.get("stage_1_train", {}), skip_keys={"model_path"})
-args = resolve_model_from_config(args, config, needs_family=False)
+args = apply_section_overrides(args, config.get("stage_1_train", {}))
 
 
 if not args.multi_objective_dataset_name:

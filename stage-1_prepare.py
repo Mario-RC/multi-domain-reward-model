@@ -15,7 +15,7 @@ from argparse import ArgumentParser
 import traceback
 import json
 from datetime import datetime
-from config_utils import load_yaml_config, apply_section_overrides, resolve_model_from_config
+from config_utils import load_yaml_config, apply_section_overrides
 
 
 def _build_save_paths(base_data_dir: str, model_name: str, dataset_folder: str, base_file_stem: str, n_shards: int, shard_idx: int):
@@ -119,8 +119,7 @@ parser.add_argument("--device", type=int, default=0, help="CUDA device index for
 args = parser.parse_args()
 
 config = load_yaml_config(args.config_path)
-args = apply_section_overrides(args, config.get("stage_1_prepare", {}), skip_keys={"model_path"})
-args = resolve_model_from_config(args, config, needs_family=True)
+args = apply_section_overrides(args, config.get("stage_1_prepare", {}))
 
 target_split = str(args.dataset_split).lower()
 

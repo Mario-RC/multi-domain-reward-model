@@ -20,6 +20,23 @@ The multi-domain data (Multi-Domain-Data-Scoring.jsonl & Multi-Domain-Data-Prefe
 
 - https://github.com/mestecha/multidomain_data_scoring
 
+### Datasets used
+
+- **Multi-objective data:** [`Multi-Domain-Data-Scoring`](https://github.com/mestecha/multidomain_data_scoring/tree/main)
+- **Preference data:** [`Multi-Domain-Data-Preference-Pairs`](https://github.com/mestecha/multidomain_data_scoring/tree/main)
+- **Reference data:** [`RLHFlow/UltraFeedback-preference-standard`](https://huggingface.co/datasets/RLHFlow/UltraFeedback-preference-standard)
+- **Reward bench:** [`allenai/reward-bench`](https://huggingface.co/datasets/allenai/reward-bench)
+
+---
+
+## Base Models
+
+The following base reward models have been used in this project:
+
+- **Llama3:** [`sfairXC/FsfairX-LLaMA3-RM-v0.1`](https://huggingface.co/sfairXC/FsfairX-LLaMA3-RM-v0.1)
+- **Gemma2:** [`sfairXC/FsfairX-Gemma2-RM-v0.1`](https://huggingface.co/sfairXC/FsfairX-Gemma2-RM-v0.1)
+- **Qwen3:** [`nvidia/Qwen3-Nemotron-8B-BRRM`](https://huggingface.co/nvidia/Qwen3-Nemotron-8B-BRRM)
+
 ---
 
 ## Working Attributes
@@ -80,8 +97,6 @@ Base script: `mdorm.sh`
 ```
 
 `mdorm.sh` is intentionally fixed to Llama3 defaults for a stable baseline run.
-
-Per-model scripts are also available: `mdorm_llama3.sh`, `mdorm_gemma2.sh`, `mdorm_qwen.sh`.
 
 ### Stage 1 prepare
 ```bash
@@ -178,91 +193,48 @@ python3 predict.py \
 
 ## Alternative Flow: `config.yaml`
 
-If you want to run the pipeline with configurable model profiles (Llama3, Gemma2, Qwen3-Nemotron), use `config.yaml` instead of hardcoded CLI parameters.
-
-### Model Selection via `config.yaml`
-
-The project supports selecting the base model from `config.yaml`:
+Instead of hardcoded CLI parameters, you can use `config.yaml` to configure the pipeline. Each stage has its own flat section with `model_path`, `model_family`, and all relevant parameters. Change them directly before each training run.
 
 ```yaml
-model:
-  selected: llama3
-  registry:
-    llama3:
-      model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
-      model_family: llama3
-      packaged_model_name: multi-domain-rm-llama-3-8b-it
-    gemma2:
-      model_path: sfairXC/FsfairX-Gemma2-RM-v0.1
-      model_family: gemma2
-      packaged_model_name: multi-domain-rm-gemma-2-9b-it
-    qwen3:
-      model_path: nvidia/Qwen3-Nemotron-8B-BRRM
-      model_family: qwen3
-      packaged_model_name: multi-domain-rm-qwen-3-8b-it
+stage_1_prepare:
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  model_family: llama3
+  dataset_path: data/Multi-Domain-Data-Scoring
+  ...
+
+stage_2_train:
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  model_family: llama3
+  preference_dataset_name: Multi-Domain-Data-Preference-Pairs
+  reference_dataset_name: null  # null = use preference_dataset_name
+  ...
+
+stage_3_package:
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  output_model_name: multi-domain-rm-llama-3-8b-it
+  ...
 ```
 
-> Set `model.selected` in `config.yaml` to choose the active model.
-CLI arguments still override `config.yaml` values when explicitly provided.
+> CLI arguments still override `config.yaml` values when explicitly provided.
 
-> `packaged_model_name` is used to auto-populate:
-
-- `stage_3_package.output_model_name`
-- `inference.model_name`
-
-### Data Prepare selection via `config.yaml`
-
-The project supports selecting Stage 2 preparation data from `config.yaml`:
-
-```yaml
-stage_2_prepare:
-  profile: preference_data
-  presets:
-    preference_data:
-      dataset_path: data/Multi-Domain-Data-Preference-Pairs
-      dataset_split: train
-      output_dataset_name: Multi-Domain-Data-Preference-Pairs
-    reference_data:
-      dataset_path: RLHFlow/UltraFeedback-preference-standard
-      dataset_split: train
-      output_dataset_name: UltraFeedback-preference-standard
-    reward-bench_eval_data:
-      dataset_path: allenai/reward-bench
-      dataset_split: filtered
-      output_dataset_name: reward-bench
-```
-
-> Set `stage_2_prepare.profile` in `config.yaml` to choose the active profile.
-CLI arguments still override `config.yaml` values when explicitly provided.
-
-### Config-driven training commands
-
-Run the training pipeline with:
+### Config-driven commands
 
 ```bash
 python3 stage-1_prepare.py --config_path config.yaml
 python3 stage-1_train.py --config_path config.yaml
 python3 stage-2_prepare.py --config_path config.yaml
 python3 stage-2_train.py --config_path config.yaml
-```
-
-### Config-driven packaging and inference
-
-```bash
 python3 stage-3_package_model.py --config_path config.yaml
 python3 evaluate.py --config_path config.yaml
 python3 predict.py --config_path config.yaml
 ```
-
-> Note: Stage 3 packaging supports the configured backbone profiles in `config.yaml` (Llama3, Gemma2, Qwen3-Nemotron).
-`evaluate.py` and `predict.py` use the same `inference.*` config keys.
 
 ## Directory Tree
 
 ```text
 model/
 ├── embeddings/
-│   └── <model_selected>/
+│   └── <model_name>/
 │       ├── <multi_objective_dataset_name>-<split>/
 │       │   └── <multi_objective_dataset_name>-<split>.safetensors
 │       │
@@ -276,10 +248,10 @@ model/
 │           └── <reference_dataset_name>-<split>.safetensors
 │
 ├── gating_network/
-│   └── gating_network_<model_selected>_mo_<multi_objective_dataset_name>_pref_<preference_dataset_name>_ref_<reference_dataset_name>_T10.0_N2000_seed0.pt
+│   └── gating_network_<model_name>_mo_<multi_objective_dataset_name>_pref_<preference_dataset_name>_ref_<reference_dataset_name>_T10.0_N2000_seed0.pt
 │
 ├── regression_weights/
-│   └── <model_selected>_<multi_objective_dataset_name>.pt
+│   └── <model_name>_<multi_objective_dataset_name>.pt
 │
 └── multi-domain-rm-<model_name>/
   ├── config.json

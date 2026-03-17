@@ -347,10 +347,7 @@ def main() -> None:
         args.scoring_data_path = s1_cfg.get("dataset_path", "data/Multi-Domain-Data-Scoring")
 
     if not args.preference_data_path:
-        s2_cfg = config.get("stage_2_prepare", {})
-        presets = s2_cfg.get("presets", {})
-        pref_preset = presets.get("preference_data", {})
-        args.preference_data_path = pref_preset.get("path", "data/Multi-Domain-Data-Preference-Pairs")
+        args.preference_data_path = "data/Multi-Domain-Data-Preference-Pairs"
 
     # Load model
     path = _resolve_inference_model_path(config, args.model_path, args.model_parent_dir, args.model_name)

@@ -10,7 +10,7 @@ from tqdm.auto import tqdm
 from safetensors.torch import save_file
 from argparse import ArgumentParser
 from datetime import datetime
-from config_utils import cli_has_flag, load_yaml_config, apply_section_overrides, resolve_model_from_config
+from config_utils import load_yaml_config, apply_section_overrides
 
 
 def _build_save_paths(base_data_dir: str, model_name: str, dataset_folder: str, base_file_stem: str, n_shards: int, shard_idx: int):
@@ -161,30 +161,10 @@ parser.add_argument("--seq_len", type=int, default=8192, help="Maximum sequence 
 args = parser.parse_args()  # Parse CLI inputs.
 
 config = load_yaml_config(args.config_path)
-stage2_cfg = config.get("stage_2_prepare", {}) if isinstance(config, dict) else {}
-args = apply_section_overrides(
-    args,
-    stage2_cfg,
-    skip_keys={"model_path", "model_family", "profile", "presets"},
-)
-
-# Resolve dataset settings from the selected stage_2_prepare profile unless CLI overrides them.
-profile = stage2_cfg.get("profile") if isinstance(stage2_cfg, dict) else None
-presets = stage2_cfg.get("presets", {}) if isinstance(stage2_cfg, dict) else {}
-if isinstance(profile, str) and isinstance(presets, dict):
-    selected_preset = presets.get(profile, {})
-    if isinstance(selected_preset, dict):
-        if not cli_has_flag("--dataset_path") and selected_preset.get("dataset_path") is not None:
-            args.dataset_path = selected_preset["dataset_path"]
-        if not cli_has_flag("--dataset_split") and selected_preset.get("dataset_split") is not None:
-            args.dataset_split = selected_preset["dataset_split"]
-        if not cli_has_flag("--source") and selected_preset.get("source") is not None:
-            args.source = selected_preset["source"]
-
-args = resolve_model_from_config(args, config, needs_family=True)
+args = apply_section_overrides(args, config.get("stage_2_prepare", {}))
 
 if not args.model_path:
-    print("FATAL ERROR: --model_path is required (or set model.selected/model.registry in config.yaml).")
+    print("FATAL ERROR: --model_path is required (set stage_2_prepare.model_path in config.yaml or pass --model_path).")
     sys.exit(1)
 
 # Validate model family against loaded model config.
