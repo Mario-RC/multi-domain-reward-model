@@ -65,7 +65,7 @@ stage_2_train:
   model_family: llama3
   multi_objective_dataset_name: Multi-Domain-Data-Scoring
   preference_dataset_name: Multi-Domain-Data-Preference-Pairs
-  reference_dataset_name: UltraFeedback-preference-standard  # null = use preference_dataset_name
+  reference_dataset_name: null
   dataset_split: train
   eval_reward_bench: true
   device: "0"
@@ -73,7 +73,7 @@ stage_2_train:
   weight_decay: 0.0
   n_steps: 2000
   batch_size: 1024
-  verbosity_dim: 4
+  verbosity_dim: -1  # Disabled: multi-domain attributes have no verbosity dimension
   corr_threshold: 0.03
   logit_scale: 1.0
   temperature: 10.0
@@ -91,7 +91,7 @@ stage_3_package:
   model_family: llama3
   multi_objective_dataset_name: Multi-Domain-Data-Scoring
   preference_dataset_name: Multi-Domain-Data-Preference-Pairs
-  reference_dataset_name: UltraFeedback-preference-standard
+  reference_dataset_name: null
   model_parent_dir: model
   output_model_name: multi-domain-rm-llama-3-8b-it
 
@@ -102,3 +102,25 @@ inference:
   model_parent_dir: model
   model_name: multi-domain-rm-llama-3-8b-it
   model_path: null
+
+
+# --- Baseline evaluation ---
+#
+#  Modes:
+#   - no_regression + skip_scoring: native reward score, preference only (LLaMA3, Gemma2)
+#   - no_regression:                native reward score, scoring + preference
+#   - generative_judge + skip_scoring: generative judge, preference only (BRRM)
+#   - (default):                    stage-1 regression weights, scoring only
+
+evaluate_baseline:
+  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  scoring_data_path: data/Multi-Domain-Data-Scoring
+  preference_data_path: data/Multi-Domain-Data-Preference-Pairs
+  dataset_name: Multi-Domain-Data-Scoring
+  max_length: 4096
+  max_samples: null
+  no_regression: true
+  skip_scoring: false
+  skip_preference: false
+  generative_judge: false
+  max_gen_tokens: 8192

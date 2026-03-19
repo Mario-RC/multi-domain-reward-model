@@ -161,18 +161,20 @@ except Exception as e:
 alphas = [0.0001, 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000]
 print(f"Using alphas for Ridge regression: {alphas}")
 
-results_list = []
-
 # ---------------------------
 # Ridge regression per attribute
 # ---------------------------
-print("Training Ridge regression models for each attribute and alpha...")
+print("Training Ridge regression models for each attribute...")
+print(f"  {'Attribute':<45} {'Alpha':>8} {'Val MSE':>10} {'Pearson':>10} {'Spearman':>10} {'N_val':>8}")
+print(f"  {'-'*45} {'-'*8} {'-'*10} {'-'*10} {'-'*10} {'-'*8}")
+final_weights_dict = {}
+any_trained = False
+
 for attr_idx in tqdm(range(Y_train.shape[1]), desc="Training Attributes"):
     attribute_name = attributes[attr_idx]
     y_train_attr = Y_train[:, attr_idx]
     y_val_attr = Y_val[:, attr_idx]
 
-    # Masks for valid labels
     valid_mask_train = ~np.isnan(y_train_attr)
     valid_mask_val = ~np.isnan(y_val_attr)
 
@@ -181,108 +183,50 @@ for attr_idx in tqdm(range(Y_train.shape[1]), desc="Training Attributes"):
     y_val_filtered = y_val_attr[valid_mask_val]
     X_val_filtered = X_val[valid_mask_val]
 
-    # Skip if no data
+    n_val = len(y_val_filtered)
+
     if len(X_train_filtered) == 0 or len(X_val_filtered) == 0:
-        print(f"Warning: Skipping '{attribute_name}' (index {attr_idx}) due to insufficient data.")
-        results_list.append({"attribute": attr_idx, "alpha": np.nan, "loss": np.nan})
+        print(f"  Warning: Skipping '{attribute_name}' (index {attr_idx}) due to insufficient data.")
         continue
 
-    # Evaluate each alpha
+    # Search over alphas, keep the best model directly.
+    best_loss = np.inf
+    best_clf = None
+    best_alpha = np.nan
+
     for alpha in alphas:
         try:
             clf = Ridge(alpha=alpha, fit_intercept=False, solver='cholesky')
             clf.fit(X_train_filtered, y_train_filtered)
             pred = clf.predict(X_val_filtered)
             loss = mean_squared_error(y_val_filtered, pred)
-            results_list.append({"attribute": attr_idx, "alpha": alpha, "loss": loss})
+            if loss < best_loss:
+                best_loss = loss
+                best_clf = clf
+                best_alpha = alpha
         except Exception as e:
-            print(f"Warning: Error training attribute {attr_idx} with alpha {alpha}: {e}. Skipping alpha.")
-            results_list.append({"attribute": attr_idx, "alpha": alpha, "loss": np.inf})
+            print(f"  Warning: Error training attribute {attr_idx} with alpha {alpha}: {e}. Skipping alpha.")
 
-df_results = pd.DataFrame.from_records(results_list)
+    if best_clf is None:
+        print(f"  Warning: No valid model for '{attribute_name}'. Skipping.")
+        continue
 
-if df_results.empty:
-    print("FATAL ERROR: No Ridge regression models were trained successfully.")
-    sys.exit(1)
+    final_weights_dict[attr_idx] = best_clf.coef_
+    any_trained = True
 
-# ---------------------------
-# Select best alphas by validation loss
-# ---------------------------
-print("\nSelecting the best alpha for each attribute based on validation loss...")
-
-# Drop skipped/failed rows
-df_valid_results = df_results.dropna(subset=['loss'])
-df_valid_results = df_valid_results[np.isfinite(df_valid_results['loss'])]
-
-if df_valid_results.empty:
-    print("FATAL ERROR: No attributes were trained successfully (all losses were NaN or Inf).")
-    sys.exit(1)
-
-best_indices = df_valid_results.groupby("attribute")["loss"].idxmin()
-best_alphas = df_valid_results.loc[best_indices]
-
-print("Best alphas selected (with validation correlations):")
-print(f"  {'Attribute':<45} {'Alpha':>8} {'Val MSE':>10} {'Pearson':>10} {'Spearman':>10} {'N_val':>8}")
-print(f"  {'-'*45} {'-'*8} {'-'*10} {'-'*10} {'-'*10} {'-'*8}")
-for _, row in best_alphas.iterrows():
-    attr_idx = int(row['attribute'])
-    best_alpha = row['alpha']
-    attribute_name = attributes[attr_idx]
-
-    y_train_attr = Y_train[:, attr_idx]
-    y_val_attr = Y_val[:, attr_idx]
-    valid_mask_train = ~np.isnan(y_train_attr)
-    valid_mask_val = ~np.isnan(y_val_attr)
-
-    X_train_f = X_train[valid_mask_train]
-    y_train_f = y_train_attr[valid_mask_train]
-    X_val_f = X_val[valid_mask_val]
-    y_val_f = y_val_attr[valid_mask_val]
-
-    n_val = len(y_val_f)
     pearson_r = np.nan
     spearman_r = np.nan
+    if n_val >= 2:
+        pred_val = best_clf.predict(X_val_filtered)
+        if np.std(y_val_filtered) > 0 and np.std(pred_val) > 0:
+            pearson_r = pearsonr(y_val_filtered, pred_val)[0]
+            spearman_r = spearmanr(y_val_filtered, pred_val)[0]
 
-    if n_val >= 2 and not np.isnan(best_alpha):
-        clf_tmp = Ridge(alpha=best_alpha, fit_intercept=False, solver='cholesky')
-        clf_tmp.fit(X_train_f, y_train_f)
-        pred_val = clf_tmp.predict(X_val_f)
-        if np.std(y_val_f) > 0 and np.std(pred_val) > 0:
-            pearson_r = pearsonr(y_val_f, pred_val)[0]
-            spearman_r = spearmanr(y_val_f, pred_val)[0]
+    print(f"  {attribute_name:<45} {best_alpha:>8.1f} {best_loss:>10.4f} {pearson_r:>10.4f} {spearman_r:>10.4f} {n_val:>8}")
 
-    print(f"  {attribute_name:<45} {best_alpha:>8.1f} {row['loss']:>10.4f} {pearson_r:>10.4f} {spearman_r:>10.4f} {n_val:>8}")
-
-# ---------------------------
-# Fit final models with best alphas
-# ---------------------------
-print("\nFitting final Ridge regression models with the best alphas...")
-final_weights_dict = {}
-processed_attributes_indices = set()
-
-for _, row in tqdm(best_alphas.iterrows(), total=len(best_alphas), desc="Fitting Final Models"):
-    attr_idx = int(row["attribute"])
-    best_alpha = row["alpha"]
-
-    if np.isnan(best_alpha):
-        continue
-
-    y_train_attr = Y_train[:, attr_idx]
-    valid_mask_train = ~np.isnan(y_train_attr)
-    X_train_filtered = X_train[valid_mask_train]
-    y_train_filtered = y_train_attr[valid_mask_train]
-
-    if len(X_train_filtered) == 0:
-        print(f"Warning: No valid training data for attribute {attr_idx} during final fit. Skipping.")
-        continue
-
-    try:
-        clf_final = Ridge(alpha=best_alpha, fit_intercept=False)
-        clf_final.fit(X_train_filtered, y_train_filtered)
-        final_weights_dict[attr_idx] = clf_final.coef_
-        processed_attributes_indices.add(attr_idx)
-    except Exception as e:
-        print(f"Error during final fit for attribute {attr_idx}: {e}. Skipping weight extraction.")
+if not any_trained:
+    print("FATAL ERROR: No attributes were trained successfully.")
+    sys.exit(1)
 
 # Ensure each attribute has a weight vector
 final_weights_list = []

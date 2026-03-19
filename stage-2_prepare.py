@@ -153,7 +153,7 @@ parser.add_argument("--model_family", type=str, default="llama3", help="Model fa
 parser.add_argument("--output_dataset_name", type=str, default=None, help="Optional override for output dataset folder/file prefix.")
 parser.add_argument("--dataset_path", type=str, default="RLHFlow/UltraFeedback-preference-standard", help="Path to the dataset (HuggingFace path or local folder)")
 parser.add_argument("--source", default=None, type=str, help="Source filter for the dataset")
-parser.add_argument("--dataset_split", type=str, default="all", help="Dataset split to use. Use 'all' to aggregate all available splits.")
+parser.add_argument("--dataset_split", type=str, default="train", help="Dataset split to use. Use 'all' to aggregate all available splits.")
 parser.add_argument("--n_shards", type=int, default=1, help="Total number of shards to divide the dataset into")
 parser.add_argument("--shard_idx", type=int, default=1, help="Index of the current shard")
 parser.add_argument("--device", type=int, default=0, help="CUDA device index to use for computation")

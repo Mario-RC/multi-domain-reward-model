@@ -26,7 +26,7 @@ class GatingNetwork(nn.Module):
         for i, layer in enumerate(self.layers):
             x = F.relu(layer(x)) if i < len(self.layers) - 1 else layer(x)
         # Temperature controls distribution sharpness over objectives.
-        x = F.softmax(x / self.temperature, dim=1)
+        x = F.softmax(x / self.temperature, dim=-1)
         return x * self.logit_scale[0]
 
 TOKEN_PATTERNS_BY_MODEL_TYPE = {

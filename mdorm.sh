@@ -71,11 +71,15 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-3_package_model.py \
 ##########################################
 ### evaluate ###
 CUDA_VISIBLE_DEVICES=0 python3 evaluate.py \
---model_family llama3 \
 --model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################
 ### predict ###
 CUDA_VISIBLE_DEVICES=0 python3 predict.py \
---model_family llama3 \
 --model_name multi-domain-rm-llama-3-8b-it
+
+##########################################
+### evaluate baseline (no regression) ###
+CUDA_VISIBLE_DEVICES=0 python3 evaluate_baseline.py \
+--model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
+--no_regression

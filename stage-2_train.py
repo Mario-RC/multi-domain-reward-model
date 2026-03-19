@@ -17,11 +17,7 @@ import datasets
 import traceback  # Used for detailed error traces
 from config_utils import load_yaml_config, apply_section_overrides
 
-# --- DDP IMPORTS ---
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
-from datetime import timedelta, datetime
-# -------------------
+from datetime import datetime
 
 # Enable TF32 for better throughput on Ampere+ GPUs.
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -44,32 +40,6 @@ attributes = [
     "mu_coherence", "mu_cultural_specificity", "mu_cultural_value",
     "mu_empathy", "mu_naturalness"
 ]
-
-# ----------------------------
-# DDP UTILITIES
-# ----------------------------
-def ddp_is_initialized() -> bool:
-    """Check if DDP environment is available and initialized."""
-    return dist.is_available() and dist.is_initialized()
-
-def ddp_setup():
-    """Initialize the DDP process group and get rank/world_size."""
-    if "LOCAL_RANK" in os.environ:
-        try:
-            dist.init_process_group(backend="nccl", timeout=timedelta(minutes=60))
-            local_rank = int(os.environ["LOCAL_RANK"])
-            rank = dist.get_rank()
-            world_size = dist.get_world_size()
-            torch.cuda.set_device(local_rank)
-            print(f"DDP Setup: Rank {rank}/{world_size}, Local Rank {local_rank} on Device cuda:{local_rank}")
-            return local_rank, rank, world_size
-        except Exception as e:
-            print(f"FATAL ERROR: Failed to initialize DDP: {e}")
-            traceback.print_exc()
-            sys.exit(1)
-    else:
-        print("DDP Setup: Running in single process mode.")
-        return 0, 0, 1
 
 # ----------------------------
 # MODEL
@@ -274,7 +244,7 @@ def load_embeddings(embedding_path_pattern):
 # ----------------------------
 def main():
     """Main function to parse arguments, load data, train the model, and evaluate."""
-    parser = ArgumentParser(description="Train ArmoRM Gating Network using DDP")
+    parser = ArgumentParser(description="Train ArmoRM Gating Network")
     parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
     parser.add_argument("--model_key", type=str, default=None, help="Model key defined in config.yaml:model:registry.")
     parser.add_argument("--model_path", type=str, default=None, help="Path or HF ID of the base Reward Model")
@@ -282,12 +252,11 @@ def main():
     parser.add_argument("--preference_dataset_name", type=str, default=None, help="Preference dataset folder name (matches stage-2_prepare output_dataset_name). Required.")
     parser.add_argument("--reference_dataset_name", type=str, default=None, help="Reference dataset folder name (matches stage-2_prepare output_dataset_name). If null, uses preference_dataset_name.")
     parser.add_argument("--dataset_split", type=str, default="train", help="Split suffix used by stage-2_prepare outputs (e.g., train, all, val, test)."    )
-    # `--device` is mostly ignored under `torchrun`; `LOCAL_RANK` drives device selection.
-    parser.add_argument("--device", type=str, default="0", help="Ignored by torchrun, uses LOCAL_RANK instead")
+    parser.add_argument("--device", type=str, default="0", help="CUDA device index")
     parser.add_argument("--learning_rate", type=float, default=1e-3, help="Learning rate for AdamW optimizer")
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay for AdamW optimizer")
     parser.add_argument("--n_steps", type=int, default=2000, help="Total number of training steps")
-    parser.add_argument("--batch_size", type=int, default=1024, help="Global batch size across all GPUs")
+    parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")
     parser.add_argument("--verbosity_dim", type=int, default=4, help="Index (0-based) of the verbosity attribute in the multi-objective reward vector")
     parser.add_argument("--corr_threshold", type=float, default=0.03, help="Maximum allowed absolute Spearman correlation for verbosity debiasing")
     parser.add_argument("--model_family", type=str, default="llama3", choices=["llama3", "gemma2", "qwen3", "auto"], help="Model family for token pattern matching during embedding extraction (if applicable, less relevant here)")
@@ -304,10 +273,7 @@ def main():
     config = load_yaml_config(args.config_path)
     args = apply_section_overrides(args, config.get("stage_2_train", {}))
 
-    # --- DDP setup ---
-    local_rank, rank, world_size = ddp_setup()
-    device = torch.device(f"cuda:{local_rank}") if torch.cuda.is_available() and world_size > 0 else torch.device("cpu")
-    # -----------------
+    device = torch.device(f"cuda:{args.device}") if torch.cuda.is_available() else torch.device("cpu")
 
     # Seed RNGs for reproducibility.
     torch.manual_seed(args.seed)
@@ -321,15 +287,13 @@ def main():
     # Validate preference_dataset_name (required).
     if not args.preference_dataset_name:
         print("FATAL ERROR: --preference_dataset_name is required (set stage_2_train.preference_dataset_name in config.yaml or pass --preference_dataset_name).")
-        if ddp_is_initialized(): dist.destroy_process_group()
         sys.exit(1)
 
     # Resolve reference_dataset_name (fallback: preference_dataset_name).
-    # Pass --reference_dataset_name null to explicitly use preference_dataset_name.
+    # Pass --reference_dataset_name null to use preference data for verbosity debiasing.
     if args.reference_dataset_name is None or args.reference_dataset_name.lower() == "null":
         args.reference_dataset_name = args.preference_dataset_name
-        if rank == 0:
-            print(f"NOTE: No reference_dataset_name specified. Using preference_dataset_name ({args.preference_dataset_name}) for verbosity debiasing.")
+        print(f"NOTE: No reference_dataset_name specified. Using preference_dataset_name ({args.preference_dataset_name}) for verbosity debiasing.")
 
     # Extract short names used in filesystem paths.
     args.model_name = args.model_path.split("/")[-1]
@@ -359,49 +323,51 @@ def main():
     )
     # -------------------------
 
-    if rank == 0:  # Print paths only once.
-        print(f"Preference Embedding Path Pattern: {preference_embedding_path_pattern}")
-        print(f"Regression Layer Path: {regression_layer_path}")
-        print(f"Reference Embedding Path Pattern: {reference_embedding_path_pattern}")
-        print(f"RewardBench Embedding Path Pattern: {reward_bench_embedding_path_pattern}")
+    # Print paths.
+    print(f"Preference Embedding Path Pattern: {preference_embedding_path_pattern}")
+    print(f"Regression Layer Path: {regression_layer_path}")
+    print(f"Reference Embedding Path Pattern: {reference_embedding_path_pattern}")
+    print(f"RewardBench Embedding Path Pattern: {reward_bench_embedding_path_pattern}")
 
     # Load data to CPU with robust error handling.
     try:
-        if rank == 0: print("Loading preference embeddings (to CPU RAM)...")
+        print("Loading preference embeddings (to CPU RAM)...")
         embeddings_cpu, prompt_embeddings_cpu = load_embeddings(preference_embedding_path_pattern)
 
         if args.max_samples is not None and args.max_samples < len(embeddings_cpu):
-            if rank == 0: print(f"NOTE: Subsetting preference data to first {args.max_samples} samples.")
+            print(f"NOTE: Subsetting preference data to first {args.max_samples} samples.")
             indices = torch.arange(args.max_samples)
             embeddings_cpu = embeddings_cpu[indices]
             prompt_embeddings_cpu = prompt_embeddings_cpu[indices]
 
-        if rank == 0: print("Loading regression layer (to device)...")
+        print("Loading regression layer (to device)...")
         regression_layer = torch.load(regression_layer_path, map_location=device, weights_only=True)["weight"].float()
         n_attributes, hidden_size = regression_layer.shape
 
-        if rank == 0: print("Loading reference embeddings for debiasing (to CPU RAM)...")
-        ref_embeddings_cpu, _ = load_embeddings(reference_embedding_path_pattern)
+        ref_embeddings_cpu = None
+        if args.verbosity_dim >= 0:
+            print("Loading reference embeddings for debiasing (to CPU RAM)...")
+            ref_embeddings_cpu, _ = load_embeddings(reference_embedding_path_pattern)
 
-        if args.max_samples is not None and args.max_samples < len(ref_embeddings_cpu):
-            if rank == 0: print(f"NOTE: Subsetting reference data to first {args.max_samples} samples.")
-            indices_ref = torch.arange(args.max_samples)
-            ref_embeddings_cpu = ref_embeddings_cpu[indices_ref]
+            if args.max_samples is not None and args.max_samples < len(ref_embeddings_cpu):
+                print(f"NOTE: Subsetting reference data to first {args.max_samples} samples.")
+                indices_ref = torch.arange(args.max_samples)
+                ref_embeddings_cpu = ref_embeddings_cpu[indices_ref]
+        else:
+            print("Verbosity debiasing disabled (verbosity_dim < 0). Skipping reference embeddings.")
 
     except (ValueError, FileNotFoundError, KeyError) as e:
-        print(f"FATAL ERROR (Rank {rank}): Failed during data loading: {e}.")
+        print(f"FATAL ERROR: Failed during data loading: {e}.")
         print("Please ensure:")
         print("1. All necessary `stage-1` and `stage-2_prepare` scripts ran successfully.")
         print("2. The file paths printed above point to existing files/folders.")
         print(f"3. Regression weights file ({regression_layer_path}) contains the 'weight' key.")
-        if ddp_is_initialized(): dist.destroy_process_group()
         sys.exit(1)
 
-    # Calculate verbosity penalties (rank 0 only, CPU side).
-    penalties = None
-    penalties_tensor = torch.zeros(n_attributes, device=device)  # Placeholder for all ranks.
-    if rank == 0:
-        print("Calculating verbosity penalties on rank 0...")
+    # Calculate verbosity penalties.
+    penalties_tensor = torch.zeros(n_attributes, device=device)
+    if args.verbosity_dim >= 0:
+        print("Calculating verbosity penalties...")
         ref_embeddings_for_debiasing = ref_embeddings_cpu.to('cpu')  # Ensure CPU tensor.
         # Proceed only when reference embeddings are available and non-empty.
         if ref_embeddings_for_debiasing is not None and ref_embeddings_for_debiasing.shape[0] > 0:
@@ -434,51 +400,41 @@ def main():
         print("Penalties calculated:", penalties)
         penalties_tensor = torch.from_numpy(penalties['penalty']).float().to(device)  # Move final tensor to device.
 
-    # Broadcast penalties from rank 0 to all ranks.
-    if ddp_is_initialized() and world_size > 1:
-        dist.broadcast(penalties_tensor, src=0)
-        # Non-zero ranks can reconstruct local dicts if needed; tensor is the source of truth.
-        # penalties = {'penalty': penalties_tensor.cpu().numpy()}
+
 
     # Build reward transform matrix on device.
     reward_transform_matrix = torch.eye(n_attributes, device=device)
-    if 0 <= args.verbosity_dim < n_attributes:
+    if args.verbosity_dim < 0:
+        print("Verbosity debiasing disabled (verbosity_dim < 0). Using identity reward_transform_matrix.")
+    elif args.verbosity_dim < n_attributes:
         reward_transform_matrix[args.verbosity_dim, :] -= penalties_tensor  # Apply verbosity penalties to verbosity row.
     else:
-        if rank == 0: print(f"Warning: Invalid verbosity_dim ({args.verbosity_dim}). Not applying verbosity penalties.")
+        print(f"Warning: verbosity_dim ({args.verbosity_dim}) out of range (0-{n_attributes-1}). Not applying verbosity penalties.")
 
     # Keep dataset tensors on CPU; move mini-batches on demand.
     X_cpu = prompt_embeddings_cpu
     Z_cpu = embeddings_cpu
 
     # Split train/validation sets on CPU.
-    if rank == 0: print("Splitting data into train/validation sets (CPU)...")
+    print("Splitting data into train/validation sets (CPU)...")
     X_train_cpu, X_val_cpu, Z_train_cpu, Z_val_cpu = train_test_split(
         X_cpu, Z_cpu, test_size=0.2, random_state=args.seed, shuffle=True
     )
-    if rank == 0: print(f"Train size: {len(X_train_cpu)}, Validation size: {len(X_val_cpu)}")
+    print(f"Train size: {len(X_train_cpu)}, Validation size: {len(X_val_cpu)}")
 
     # Release original large CPU tensors after split.
     del embeddings_cpu, prompt_embeddings_cpu, ref_embeddings_cpu, X_cpu, Z_cpu
     torch.cuda.empty_cache()  # Hint CUDA allocator to release cached blocks.
 
-    # Derive per-process batch size from global batch size.
-    per_gpu_batch_size = max(1, args.batch_size // world_size)
-    if rank == 0: print(f"Global batch size: {args.batch_size}, Per-GPU batch size: {per_gpu_batch_size}")
+    print(f"Batch size: {args.batch_size}")
 
     # Initialize gating network on selected device.
-    if rank == 0: print("Initializing gating network...")
+    print("Initializing gating network...")
     input_dim = X_train_cpu.shape[-1]  # Input feature dimension.
     gating_network = GatingNetwork(
         input_dim, n_attributes, n_hidden=args.n_hidden, hidden_dim=args.hidden_size,
         logit_scale=args.logit_scale, temperature=args.temperature, dropout=args.dropout,
     ).to(device)
-
-    # Wrap with DDP in multi-process runs.
-    if ddp_is_initialized() and world_size > 1:
-        gating_network = DDP(gating_network, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=False)
-        if rank == 0: print("Wrapped model with DDP.")
-
 
     # Optimizer, loss, and scheduler.
     loss_fn = torch.nn.BCEWithLogitsLoss()
@@ -487,18 +443,18 @@ def main():
     # Choose AMP dtype based on hardware support.
     amp_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
     scaler = torch.amp.GradScaler(enabled=(device.type == 'cuda'))
-    if rank == 0: print(f"Using Automatic Mixed Precision (AMP) with dtype: {amp_dtype}")
+    print(f"Using Automatic Mixed Precision (AMP) with dtype: {amp_dtype}")
 
     # --- Training loop ---
-    if rank == 0: print(f"Starting distributed training for {args.n_steps} steps...")
-    iterator = tqdm(range(args.n_steps), disable=(rank != 0), desc=f"Rank {rank} Training Progress")
+    print(f"Starting training for {args.n_steps} steps...")
+    iterator = tqdm(range(args.n_steps), desc="Training Progress")
 
     for step in iterator:
         gating_network.train()  # Enable training behavior (e.g., dropout).
         optimizer.zero_grad(set_to_none=True)
 
         # Sample CPU indices for this step.
-        idx = torch.randint(0, X_train_cpu.shape[0], (per_gpu_batch_size,), device="cpu")
+        idx = torch.randint(0, X_train_cpu.shape[0], (args.batch_size,), device="cpu")
 
         # Transfer only the current mini-batch to device.
         X_batch = X_train_cpu[idx].to(device, non_blocking=True)
@@ -508,14 +464,14 @@ def main():
             with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
                 gating_weights = gating_network(X_batch)
                 # Predicted score per candidate: sum((Z @ W^T) * gating_weights).
-                # If explicit transform use is desired, apply `reward_transform_matrix` here.
-                pred_scores = torch.sum((Z_batch @ regression_layer.T) * gating_weights, dim=-1)
+                # Apply verbosity debiasing transform before combining with gating weights.
+                pred_scores = torch.sum((Z_batch @ regression_layer.T @ reward_transform_matrix) * gating_weights, dim=-1)
                 # Pairwise preference loss: chosen should score higher than rejected.
                 loss = loss_fn(pred_scores[:, 0] - pred_scores[:, 1], torch.ones_like(pred_scores[:, 0]))
 
             # Guard against NaN/Inf before backward pass.
             if not torch.isfinite(loss):
-                if rank == 0: print(f"Warning: Rank {rank} detected non-finite loss ({loss.item()}) at step {step}. Skipping update.")
+                print(f"Warning: Non-finite loss ({loss.item()}) at step {step}. Skipping update.")
                 continue  # Skip this optimization step.
 
             # Scaled backward/update for AMP.
@@ -525,114 +481,97 @@ def main():
             scaler.update()
             scheduler.step()
 
-            # Log progress from rank 0 only.
-            if step % 100 == 0 and rank == 0:
+            if step % 100 == 0:
                  current_lr = scheduler.get_last_lr()[0]
                  iterator.set_postfix({'Loss': f"{loss.item():.4f}", 'LR': f"{current_lr:.1e}"})
 
         except RuntimeError as e:
             # Surface detailed tensor shapes for common runtime failures.
-            print(f"FATAL ERROR (Rank {rank}) during training step {step}: {e}")
+            print(f"FATAL ERROR during training step {step}: {e}")
             print(f"Shapes - X_batch: {X_batch.shape}, Z_batch: {Z_batch.shape}, W.T: {regression_layer.T.shape}, Gating: {gating_weights.shape if 'gating_weights' in locals() else 'N/A'}")
             traceback.print_exc()
-            # Tear down process group before exiting.
-            if ddp_is_initialized(): dist.destroy_process_group()
             sys.exit(1)
 
 
-    # --- Evaluation and persistence (rank 0 only) ---
-    if ddp_is_initialized():
-        dist.barrier()  # Ensure all ranks finish training first.
+    # --- Evaluation and persistence ---
+    print("\nTraining finished. Evaluating model on validation set...")
+    model_eval = gating_network
+    model_eval.eval()
 
-    if rank == 0:
-        print("\nTraining finished. Evaluating model on validation set (Rank 0)...")
-        # Use underlying module when wrapped by DDP.
-        model_eval = gating_network.module if ddp_is_initialized() else gating_network
-        model_eval.eval()  # Evaluation mode.
+    val_correct_total = 0
+    val_total_samples = 0
+    val_batch_size = args.batch_size * 4  # Larger batch for faster validation.
 
-        val_correct_total = 0
-        val_total_samples = 0
-        val_batch_size = per_gpu_batch_size * 4  # Larger batch for faster validation.
+    with torch.no_grad():
+        val_iterator = tqdm(range(0, X_val_cpu.shape[0], val_batch_size), desc="Validation", leave=False)
+        for i in val_iterator:
+            X_val_batch = X_val_cpu[i:i+val_batch_size].to(device, non_blocking=True)
+            Z_val_batch = Z_val_cpu[i:i+val_batch_size].to(device, non_blocking=True)
 
-        with torch.no_grad():
-            val_iterator = tqdm(range(0, X_val_cpu.shape[0], val_batch_size), desc="Validation", leave=False, disable=(rank != 0))
-            for i in val_iterator:
-                # Transfer validation batch to device.
-                X_val_batch = X_val_cpu[i:i+val_batch_size].to(device, non_blocking=True)
-                Z_val_batch = Z_val_cpu[i:i+val_batch_size].to(device, non_blocking=True)
+            with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
+                gating_weights_val = model_eval(X_val_batch)
+                pred_val = torch.sum((Z_val_batch @ regression_layer.T @ reward_transform_matrix) * gating_weights_val, dim=-1)
 
-                with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
-                    gating_weights_val = model_eval(X_val_batch)
-                    pred_val = torch.sum((Z_val_batch @ regression_layer.T) * gating_weights_val, dim=-1)
+            correct_preds = ((pred_val[:, 0] - pred_val[:, 1]) > 0).sum().item()
+            val_correct_total += correct_preds
+            val_total_samples += X_val_batch.shape[0]
 
-                correct_preds = ((pred_val[:, 0] - pred_val[:, 1]) > 0).sum().item()
-                val_correct_total += correct_preds
-                val_total_samples += X_val_batch.shape[0]
+    acc_val = val_correct_total / val_total_samples if val_total_samples > 0 else 0.0
+    print(f"Final Validation Accuracy: {acc_val:.4f}")
 
-        acc_val = val_correct_total / val_total_samples if val_total_samples > 0 else 0.0
-        print(f"Final Validation Accuracy: {acc_val:.4f}")
+    # --- Save model checkpoint ---
+    save_dir = os.path.join(BASE_DATA_DIR, "gating_network")
+    os.makedirs(save_dir, exist_ok=True)
+    unique_name = (
+        f"gating_network_{args.model_name}_mo_{args.multi_objective_dataset_name}_"
+        f"pref_{pref_base}_ref_{ref_base}_T{args.temperature:.1f}_N{args.n_steps}_seed{args.seed}"
+    )
+    save_path = os.path.join(save_dir, f"{unique_name}.pt")
+    torch.save({
+        "state_dict": model_eval.state_dict(),
+        "reward_transform_matrix": reward_transform_matrix.cpu(),
+    }, save_path)
+    print(f"Saved gating network state dict to {save_path}")
 
-        # --- Save model checkpoint ---
-        save_dir = os.path.join(BASE_DATA_DIR, "gating_network")
-        os.makedirs(save_dir, exist_ok=True)
-        # Include seed in filename for reproducibility.
-        unique_name = (
-            f"gating_network_{args.model_name}_mo_{args.multi_objective_dataset_name}_"
-            f"pref_{pref_base}_ref_{ref_base}_T{args.temperature:.1f}_N{args.n_steps}_seed{args.seed}"
-        )
-        save_path = os.path.join(save_dir, f"{unique_name}.pt")
-        # Save unwrapped model weights.
-        torch.save(model_eval.state_dict(), save_path)
-        print(f"Saved gating network state dict to {save_path}")
+    # --- Optional RewardBench evaluation ---
+    if args.eval_reward_bench:
+        print("Evaluating on RewardBench...")
+        all_correct_flags_rb_list = []
+        try:
+            rb_embeddings_cpu, rb_prompt_embeddings_cpu = load_embeddings(reward_bench_embedding_path_pattern)
+        except ValueError as e:
+            print(f"Warning: Could not load RewardBench embeddings: {e}. Skipping evaluation.")
+        else:
+            rb_batch_size = args.batch_size * 4
+            rb_iterator = tqdm(range(0, rb_embeddings_cpu.shape[0], rb_batch_size), desc="RewardBench Eval", leave=False)
+            with torch.no_grad():
+                for i in rb_iterator:
+                    rb_prompt_batch = rb_prompt_embeddings_cpu[i:i+rb_batch_size].to(device, non_blocking=True)
+                    rb_embed_batch = rb_embeddings_cpu[i:i+rb_batch_size].to(device, non_blocking=True)
 
-        # --- Optional RewardBench evaluation ---
-        if args.eval_reward_bench:
-            print("Evaluating on RewardBench (Rank 0)...")
-            all_correct_flags_rb_list = []
-            try:
-                # Load RewardBench embeddings to CPU.
-                rb_embeddings_cpu, rb_prompt_embeddings_cpu = load_embeddings(reward_bench_embedding_path_pattern)
-            except ValueError as e:
-                print(f"Warning: Could not load RewardBench embeddings: {e}. Skipping evaluation.")
+                    with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
+                        gating_weights_rb = model_eval(rb_prompt_batch)
+                        pred_rb = torch.sum((rb_embed_batch @ regression_layer.T @ reward_transform_matrix) * gating_weights_rb, dim=-1)
+
+                    correct_rb_batch = (pred_rb[:, 0] > pred_rb[:, 1]).float()
+                    all_correct_flags_rb_list.append(correct_rb_batch.cpu())
+
+            if all_correct_flags_rb_list:
+                all_correct_flags_rb = torch.cat(all_correct_flags_rb_list, dim=0)
+                try:
+                    reward_bench_ds = datasets.load_dataset("allenai/reward-bench", split="filtered")
+                    if len(reward_bench_ds) == len(all_correct_flags_rb):
+                        df_examples_rb = pd.DataFrame({"subset": reward_bench_ds["subset"], "correct": all_correct_flags_rb.numpy()})
+                        scores_per_section, metrics = eval_reward_bench(df_examples_rb)
+                        print("RewardBench Scores:")
+                        print(pd.DataFrame([scores_per_section]))
+                    else:
+                        print(f"Warning: Mismatch RewardBench dataset size ({len(reward_bench_ds)}) vs predictions ({len(all_correct_flags_rb)}). Skipping score calculation.")
+                except Exception as e:
+                    print(f"Error loading or processing RewardBench dataset for evaluation: {e}")
             else:
-                 rb_batch_size = per_gpu_batch_size * 4
-                 rb_iterator = tqdm(range(0, rb_embeddings_cpu.shape[0], rb_batch_size), desc="RewardBench Eval", leave=False, disable=(rank != 0))
-                 with torch.no_grad():
-                    for i in rb_iterator:
-                        # Transfer evaluation batch to device.
-                        rb_prompt_batch = rb_prompt_embeddings_cpu[i:i+rb_batch_size].to(device, non_blocking=True)
-                        rb_embed_batch = rb_embeddings_cpu[i:i+rb_batch_size].to(device, non_blocking=True)
+                print("Warning: No RewardBench predictions were generated.")
 
-                        with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
-                           gating_weights_rb = model_eval(rb_prompt_batch)
-                           pred_rb = torch.sum((rb_embed_batch @ regression_layer.T) * gating_weights_rb, dim=-1)
-
-                        correct_rb_batch = (pred_rb[:, 0] > pred_rb[:, 1]).float()
-                        all_correct_flags_rb_list.append(correct_rb_batch.cpu())  # Store correctness flags on CPU.
-
-                 if all_correct_flags_rb_list:
-                    all_correct_flags_rb = torch.cat(all_correct_flags_rb_list, dim=0)
-                    try:
-                        # Load RewardBench subset metadata (rank 0 only).
-                        reward_bench_ds = datasets.load_dataset("allenai/reward-bench", split="filtered")
-                        # Validate prediction count matches dataset size.
-                        if len(reward_bench_ds) == len(all_correct_flags_rb):
-                            df_examples_rb = pd.DataFrame({"subset": reward_bench_ds["subset"], "correct": all_correct_flags_rb.numpy()})
-                            scores_per_section, metrics = eval_reward_bench(df_examples_rb)
-                            print("RewardBench Scores:")
-                            print(pd.DataFrame([scores_per_section]))
-                        else:
-                            print(f"Warning: Mismatch RewardBench dataset size ({len(reward_bench_ds)}) vs predictions ({len(all_correct_flags_rb)}). Skipping score calculation.")
-                    except Exception as e:
-                         print(f"Error loading or processing RewardBench dataset for evaluation: {e}")
-                 else:
-                     print("Warning: No RewardBench predictions were generated.")
-
-    # --- DDP cleanup (all ranks) ---
-    if ddp_is_initialized():
-        dist.destroy_process_group()
-        # Optional: uncomment for explicit teardown logs.
-        # print(f"Rank {rank}: Destroyed process group.")
 
 if __name__ == '__main__':
     # Wrap `main()` to keep exit paths and cleanup explicit.
@@ -650,8 +589,4 @@ if __name__ == '__main__':
         print(f"------------------------------------\n")
         exit_code = 1
     finally:
-        # Ensure DDP cleanup also runs on exceptions or early exits.
-        if ddp_is_initialized():
-            print(f"Rank {dist.get_rank()}: Cleaning up DDP process group...")
-            dist.destroy_process_group()
-        sys.exit(exit_code)  # Exit with the computed status code.
+        sys.exit(exit_code)

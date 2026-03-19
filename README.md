@@ -41,7 +41,7 @@ The following base reward models have been used in this project:
 
 ## Working Attributes
 
-This version uses **23 custom attributes** in `stage-1_prepare.py` and `stage-1_train.py`:
+This version uses **23 custom attributes** defined in `attributes.py` (single source of truth, imported by all scripts):
 
 ### Coherence (`co_`)
 
@@ -178,15 +178,29 @@ python3 stage-3_package_model.py \
 ### Evaluate the packaged model
 ```bash
 python3 evaluate.py \
-  --model_family llama3 \
   --model_name multi-domain-rm-llama-3-8b-it
 ```
 
 ### Run quick prediction comparison
 ```bash
 python3 predict.py \
-  --model_family llama3 \
   --model_name multi-domain-rm-llama-3-8b-it
+```
+
+### Evaluate baseline (no regression)
+
+Evaluate a base reward model using its native reward score (no stage-1 regression weights).
+
+```bash
+# Scalar RM — scoring + preference (LLaMA3, Gemma2)
+python3 evaluate_baseline.py \
+  --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
+  --no_regression
+
+# Generative judge — preference only (BRRM)
+python3 evaluate_baseline.py \
+  --model_path nvidia/Qwen3-Nemotron-8B-BRRM \
+  --generative_judge --skip_scoring \
 ```
 
 ---
@@ -194,26 +208,6 @@ python3 predict.py \
 ## Alternative Flow: `config.yaml`
 
 Instead of hardcoded CLI parameters, you can use `config.yaml` to configure the pipeline. Each stage has its own flat section with `model_path`, `model_family`, and all relevant parameters. Change them directly before each training run.
-
-```yaml
-stage_1_prepare:
-  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
-  model_family: llama3
-  dataset_path: data/Multi-Domain-Data-Scoring
-  ...
-
-stage_2_train:
-  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
-  model_family: llama3
-  preference_dataset_name: Multi-Domain-Data-Preference-Pairs
-  reference_dataset_name: null  # null = use preference_dataset_name
-  ...
-
-stage_3_package:
-  model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
-  output_model_name: multi-domain-rm-llama-3-8b-it
-  ...
-```
 
 > CLI arguments still override `config.yaml` values when explicitly provided.
 
@@ -227,9 +221,10 @@ python3 stage-2_train.py --config_path config.yaml
 python3 stage-3_package_model.py --config_path config.yaml
 python3 evaluate.py --config_path config.yaml
 python3 predict.py --config_path config.yaml
+python3 evaluate_baseline.py --config_path config.yaml
 ```
 
-## Directory Tree
+## Model Directory Tree
 
 ```text
 model/
@@ -264,7 +259,7 @@ model/
 ## Artifact Structure
 
 - `model/embeddings/<model_name>/<dataset_name>/*.safetensors`
-- `model/gating_network/gating_network_<model_name>_mo_<multi_objective_dataset_name>_pref_<preference_dataset_name>-<split>_T10.0_N2000_seed0.pt`
+- `model/gating_network/gating_network_<model_name>_mo_<multi_objective_dataset_name>_pref_<preference_dataset_name>_ref_<reference_dataset_name>_T10.0_N2000_seed0.pt`
 - `model/regression_weights/<model_name>_<dataset_name>.pt`
 - `model/<packaged_model_name>/`
 

@@ -87,7 +87,6 @@ def main() -> None:
     parser.add_argument("--model_path", type=str, default=None, help="Optional override for packaged model path.")
     parser.add_argument("--model_parent_dir", type=str, default="model", help="Optional packaged model parent directory.")
     parser.add_argument("--model_name", type=str, default=None, help="Optional packaged model directory name.")
-    parser.add_argument("--model_family", type=str, default=None, help="Model family (llama3, gemma2, qwen3, auto).")
     args = parser.parse_args()
 
     config = load_yaml_config(args.config_path)

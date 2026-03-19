@@ -115,6 +115,7 @@ parser.add_argument("--output_dataset_name", type=str, default=None, help="Uniqu
 parser.add_argument("--dataset_split", type=str, default="train", help="Dataset split tag for filtering/naming (e.g., train, all).")
 parser.add_argument("--n_shards", type=int, default=1, help="Total number of shards to divide the dataset into.")
 parser.add_argument("--shard_idx", type=int, default=1, help="Index of the current shard to process (1-based).")
+parser.add_argument("--max_seq_len", type=int, default=None, help="Max sequence length for truncation. If not set, uses model.config.max_position_embeddings.")
 parser.add_argument("--device", type=int, default=0, help="CUDA device index for model inference (e.g., 0, 1).")
 args = parser.parse_args()
 
@@ -254,7 +255,15 @@ labels = []
 skipped_formatting_tokenization = 0
 skipped_inference = 0
 skipped_label_extraction = 0
-max_seq_len = model.config.max_position_embeddings
+if args.max_seq_len is not None:
+    max_seq_len = args.max_seq_len
+elif hasattr(model.config, "max_position_embeddings"):
+    max_seq_len = model.config.max_position_embeddings
+else:
+    raise ValueError(
+        f"Model '{args.model_path}' does not have 'max_position_embeddings' in its config. "
+        f"Please specify --max_seq_len explicitly."
+    )
 
 print(f"Processing {len(ds)} examples in current shard to extract embeddings and labels...")
 for example in tqdm(ds, desc=f"Shard {args.shard_idx}/{args.n_shards} Processing"):

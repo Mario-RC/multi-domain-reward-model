@@ -7,6 +7,7 @@ from argparse import ArgumentParser
 from transformers import AutoConfig, AutoTokenizer
 from modeling_custom import RewardModelWithGating
 from config_utils import load_yaml_config
+from attributes import ATTRIBUTES
 
 
 def _requires_remote_code(model_path: str) -> bool:
@@ -59,7 +60,7 @@ def _build_defaults_from_config(config: dict, model_path: str, args=None):
     )
     _ref_cli = (getattr(args, "reference_dataset_name", None) if args else None)
     if _ref_cli and _ref_cli.lower() == "null":
-        # CLI explicitly said "null" → use preference_base, skip yaml.
+        # CLI explicitly said "null" → use preference_base for checkpoint naming.
         reference_base = preference_base
     elif _ref_cli:
         reference_base = _ref_cli
@@ -138,7 +139,7 @@ def main() -> None:
         print("Using trust_remote_code=True for Qwen3 model loading compatibility.")
 
     model_config = AutoConfig.from_pretrained(args.model_path, trust_remote_code=trust_remote_code)
-    model_config.num_objectives = 23
+    model_config.num_objectives = len(ATTRIBUTES)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=trust_remote_code)
 
     print("Instantiating custom architecture with base model weights...")
@@ -167,14 +168,19 @@ def main() -> None:
         raise TypeError("Stage 2 checkpoint must resolve to a state_dict dictionary.")
     model.gating.load_state_dict(stage2_state_dict)
 
-    # Ensure the reward transform matrix is a clean identity (safetensors in
-    # downstream save must not persist NaNs if upstream checkpoints omitted it).
-    with torch.no_grad():
-        eye = torch.zeros_like(model.reward_transform_matrix)
-        eye.fill_(0.0)
-        diag = torch.arange(model.num_objectives, device=eye.device)
-        eye[diag, diag] = 1.0
-        model.reward_transform_matrix.data.copy_(eye)
+    # Load reward transform matrix from checkpoint if available; fall back to
+    # identity for backward compatibility with older checkpoints.
+    if isinstance(stage2_payload, dict) and "reward_transform_matrix" in stage2_payload:
+        rtm = stage2_payload["reward_transform_matrix"].to(model.reward_transform_matrix.dtype)
+        model.reward_transform_matrix.data.copy_(rtm)
+        print(f"Loaded reward_transform_matrix from checkpoint.")
+    else:
+        with torch.no_grad():
+            eye = torch.zeros_like(model.reward_transform_matrix)
+            diag = torch.arange(model.num_objectives, device=eye.device)
+            eye[diag, diag] = 1.0
+            model.reward_transform_matrix.data.copy_(eye)
+        print("No reward_transform_matrix in checkpoint; using identity (legacy checkpoint).")
 
     print(f"Saving finalized model to: {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
