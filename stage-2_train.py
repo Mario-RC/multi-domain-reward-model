@@ -91,45 +91,49 @@ class GatingNetwork(nn.Module):
 # ----------------------------
 # UTILITY FUNCTIONS
 # ----------------------------
-def find_proper_verbosity_penalties(cluster_V, verbosity_dim=4, corr_threshold=0.028):
+def find_debiasing_penalties(cluster_V, debiasing_dim=4, corr_threshold=0.028):
     """
-    Find verbosity penalties that reduce correlation with other reward dimensions.
+    Find per-dimension penalties that decorrelate all other reward dimensions
+    from a chosen target dimension.
 
-    Iteratively increases the verbosity penalty until each dimension's absolute
-    Spearman correlation with verbosity is below `corr_threshold`.
+    For each dimension d != debiasing_dim, iteratively increases a penalty
+    factor until the absolute Spearman correlation between the adjusted d
+    and the raw debiasing_dim falls below `corr_threshold`.  The adjusted
+    value is: V_d' = V_d - penalty * V_debiasing_dim.
+
     Args:
         cluster_V (np.ndarray): Array of shape [N, K] containing multi-objective rewards.
-        verbosity_dim (int): Index of the verbosity dimension.
+        debiasing_dim (int): Index of the dimension to decorrelate from.
         corr_threshold (float): Maximum allowed absolute Spearman correlation.
     Returns:
         dict: Contains 'penalty' (np.ndarray of penalties per dim) and 'corr' (np.ndarray of final correlations).
     """
-    verbosity_penalties = sorted([
+    penalty_candidates = sorted([
         0, 0.01, 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4,
         0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95,
     ])
     K = cluster_V.shape[1]
     candidate_dims = set(range(K))
 
-    if verbosity_dim not in candidate_dims:
-        print(f"Warning: verbosity_dim {verbosity_dim} is out of bounds (0-{K-1}). Skipping debiasing.")
+    if debiasing_dim not in candidate_dims:
+        print(f"Warning: debiasing_dim {debiasing_dim} is out of bounds (0-{K-1}). Skipping debiasing.")
         return {"penalty": np.ones(K), "corr": np.ones(K)}
-    candidate_dims.remove(verbosity_dim)
+    candidate_dims.remove(debiasing_dim)
 
-    dimwise_verbosity_penalties = np.zeros(K)  # Initialize with no penalty.
+    dimwise_penalties = np.zeros(K)  # Initialize with no penalty.
     # Track final (or best observed) correlation for each dimension.
     dimwise_corr_final = {dim: 1.0 for dim in range(K)}
 
-    for verbosity_penalty in verbosity_penalties:
+    for penalty in penalty_candidates:
         if not candidate_dims:
             break  # Stop once all dimensions satisfy the threshold.
-        # Apply candidate penalty to verbosity contribution.
-        V_adjusted = cluster_V - verbosity_penalty * cluster_V[:, [verbosity_dim]]
+        # Apply candidate penalty to the target dimension's contribution.
+        V_adjusted = cluster_V - penalty * cluster_V[:, [debiasing_dim]]
         dims_to_remove = set()
         for dim in candidate_dims:
             # Compute Spearman correlation; guard against degenerate inputs.
             try:
-                corr, p_value = spearmanr(V_adjusted[:, dim], cluster_V[:, verbosity_dim])
+                corr, p_value = spearmanr(V_adjusted[:, dim], cluster_V[:, debiasing_dim])
                 if np.isnan(corr):
                     corr = 0.0  # Treat NaN as zero correlation.
             except ValueError:  # Handles constant-valued arrays.
@@ -137,7 +141,7 @@ def find_proper_verbosity_penalties(cluster_V, verbosity_dim=4, corr_threshold=0
 
             if abs(corr) <= corr_threshold:
                 dims_to_remove.add(dim)
-                dimwise_verbosity_penalties[dim] = verbosity_penalty  # First penalty that satisfies threshold.
+                dimwise_penalties[dim] = penalty  # First penalty that satisfies threshold.
                 dimwise_corr_final[dim] = corr  # Correlation at acceptance time.
             else:
                 # Keep the best (smallest absolute) correlation seen so far.
@@ -147,9 +151,9 @@ def find_proper_verbosity_penalties(cluster_V, verbosity_dim=4, corr_threshold=0
 
     # Build final per-dimension correlation summary.
     final_corr_array = np.array([dimwise_corr_final.get(dim, 1.0) for dim in range(K)])
-    final_corr_array[verbosity_dim] = 1.0  # Self-correlation.
+    final_corr_array[debiasing_dim] = 1.0  # Self-correlation.
 
-    return {"penalty": dimwise_verbosity_penalties, "corr": final_corr_array}
+    return {"penalty": dimwise_penalties, "corr": final_corr_array}
 
 
 def calculate_scores_per_section(example_counts, subset_mapping, metrics):
@@ -257,8 +261,8 @@ def main():
     parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay for AdamW optimizer")
     parser.add_argument("--n_steps", type=int, default=2000, help="Total number of training steps")
     parser.add_argument("--batch_size", type=int, default=1024, help="Batch size")
-    parser.add_argument("--verbosity_dim", type=int, default=4, help="Index (0-based) of the verbosity attribute in the multi-objective reward vector")
-    parser.add_argument("--corr_threshold", type=float, default=0.03, help="Maximum allowed absolute Spearman correlation for verbosity debiasing")
+    parser.add_argument("--debiasing_dim", type=int, default=-1, help="Index (0-based) of the attribute dimension to decorrelate from all others. Set to -1 to disable debiasing.")
+    parser.add_argument("--corr_threshold", type=float, default=0.03, help="Maximum allowed absolute Spearman correlation for debiasing")
     parser.add_argument("--model_family", type=str, default="llama3", choices=["llama3", "gemma2", "qwen3", "auto"], help="Model family for token pattern matching during embedding extraction (if applicable, less relevant here)")
     parser.add_argument("--eval_reward_bench", action="store_true", help="Evaluate on RewardBench after training (requires RewardBench embeddings)")
     parser.add_argument("--logit_scale", type=float, default=1.0, help="Scaling factor applied after softmax in the gating network")
@@ -289,19 +293,20 @@ def main():
         print("FATAL ERROR: --preference_dataset_name is required (set stage_2_train.preference_dataset_name in config.yaml or pass --preference_dataset_name).")
         sys.exit(1)
 
-    # Resolve reference_dataset_name (fallback: preference_dataset_name).
-    # Pass --reference_dataset_name null to use preference data for verbosity debiasing.
-    if args.reference_dataset_name is None or args.reference_dataset_name.lower() == "null":
+    # Resolve reference_dataset_name (fallback: preference_dataset_name for embeddings).
+    # Pass --reference_dataset_name null to use preference data for debiasing.
+    _ref_is_null = args.reference_dataset_name is None or args.reference_dataset_name.lower() == "null"
+    if _ref_is_null:
         args.reference_dataset_name = args.preference_dataset_name
-        print(f"NOTE: No reference_dataset_name specified. Using preference_dataset_name ({args.preference_dataset_name}) for verbosity debiasing.")
+        print(f"NOTE: No reference_dataset_name specified. Using preference_dataset_name ({args.preference_dataset_name}) for debiasing.")
 
     # Extract short names used in filesystem paths.
     args.model_name = args.model_path.split("/")[-1]
     # Match stage-2_prepare output naming convention: <dataset>-<dataset_split>.
     pref_base = args.preference_dataset_name
-    ref_base = args.reference_dataset_name
+    ref_base = "null" if _ref_is_null else args.reference_dataset_name
     args.preference_dataset_name = f"{pref_base}-{args.dataset_split}"
-    args.reference_dataset_name = f"{ref_base}-{args.dataset_split}"
+    args.reference_dataset_name = f"{ref_base}-{args.dataset_split}" if not _ref_is_null else f"{args.reference_dataset_name}-{args.dataset_split}"
 
     # --- Define load paths ---
     # Preference embeddings path pattern (inside dataset-split folder).
@@ -345,7 +350,7 @@ def main():
         n_attributes, hidden_size = regression_layer.shape
 
         ref_embeddings_cpu = None
-        if args.verbosity_dim >= 0:
+        if args.debiasing_dim >= 0:
             print("Loading reference embeddings for debiasing (to CPU RAM)...")
             ref_embeddings_cpu, _ = load_embeddings(reference_embedding_path_pattern)
 
@@ -354,7 +359,12 @@ def main():
                 indices_ref = torch.arange(args.max_samples)
                 ref_embeddings_cpu = ref_embeddings_cpu[indices_ref]
         else:
-            print("Verbosity debiasing disabled (verbosity_dim < 0). Skipping reference embeddings.")
+            if not _ref_is_null:
+                print(f"WARNING: reference_dataset_name '{ref_base}' was provided but debiasing_dim < 0, "
+                      f"so debiasing is disabled and the reference dataset will NOT be used. "
+                      f"Set debiasing_dim to the target dimension index to enable debiasing, "
+                      f"or pass --reference_dataset_name null to silence this warning.")
+            print("Debiasing disabled (debiasing_dim < 0). Skipping reference embeddings.")
 
     except (ValueError, FileNotFoundError, KeyError) as e:
         print(f"FATAL ERROR: Failed during data loading: {e}.")
@@ -364,10 +374,10 @@ def main():
         print(f"3. Regression weights file ({regression_layer_path}) contains the 'weight' key.")
         sys.exit(1)
 
-    # Calculate verbosity penalties.
+    # Calculate debiasing penalties.
     penalties_tensor = torch.zeros(n_attributes, device=device)
-    if args.verbosity_dim >= 0:
-        print("Calculating verbosity penalties...")
+    if args.debiasing_dim >= 0:
+        print("Calculating debiasing penalties...")
         ref_embeddings_for_debiasing = ref_embeddings_cpu.to('cpu')  # Ensure CPU tensor.
         # Proceed only when reference embeddings are available and non-empty.
         if ref_embeddings_for_debiasing is not None and ref_embeddings_for_debiasing.shape[0] > 0:
@@ -378,15 +388,15 @@ def main():
                 rewards = pairwise_rewards.reshape(-1, n_attributes) if pairwise_rewards.numel() > 0 else np.array([])
 
                 if rewards.shape[0] > 0:
-                     penalties = find_proper_verbosity_penalties(
-                        rewards.numpy(), verbosity_dim=args.verbosity_dim, corr_threshold=args.corr_threshold
+                     penalties = find_debiasing_penalties(
+                        rewards.numpy(), debiasing_dim=args.debiasing_dim, corr_threshold=args.corr_threshold
                      )
                 else:
-                    print("Warning: Rewards array for debiasing is empty. Skipping verbosity debiasing.")
+                    print("Warning: Rewards array for debiasing is empty. Skipping debiasing.")
                     penalties = {'penalty': np.zeros(n_attributes), 'corr': np.ones(n_attributes)}  # Default: no debiasing.
 
             except Exception as e:
-                print(f"Warning: Error during verbosity penalty calculation: {e}. Skipping debiasing.")
+                print(f"Warning: Error during debiasing penalty calculation: {e}. Skipping debiasing.")
                 penalties = {'penalty': np.zeros(n_attributes), 'corr': np.ones(n_attributes)}  # Safe fallback on error.
             finally:
                 # Free temporary CPU tensors as early as possible.
@@ -394,7 +404,7 @@ def main():
                 if 'pairwise_rewards' in locals(): del pairwise_rewards
                 if 'rewards' in locals(): del rewards
         else:
-             print("Warning: Reference embeddings tensor is empty or None. Skipping verbosity debiasing.")
+             print("Warning: Reference embeddings tensor is empty or None. Skipping debiasing.")
              penalties = {'penalty': np.zeros(n_attributes), 'corr': np.ones(n_attributes)}  # Safe fallback.
 
         print("Penalties calculated:", penalties)
@@ -404,12 +414,12 @@ def main():
 
     # Build reward transform matrix on device.
     reward_transform_matrix = torch.eye(n_attributes, device=device)
-    if args.verbosity_dim < 0:
-        print("Verbosity debiasing disabled (verbosity_dim < 0). Using identity reward_transform_matrix.")
-    elif args.verbosity_dim < n_attributes:
-        reward_transform_matrix[args.verbosity_dim, :] -= penalties_tensor  # Apply verbosity penalties to verbosity row.
+    if args.debiasing_dim < 0:
+        print("Debiasing disabled (debiasing_dim < 0). Using identity reward_transform_matrix.")
+    elif args.debiasing_dim < n_attributes:
+        reward_transform_matrix[args.debiasing_dim, :] -= penalties_tensor  # Apply debiasing penalties to target row.
     else:
-        print(f"Warning: verbosity_dim ({args.verbosity_dim}) out of range (0-{n_attributes-1}). Not applying verbosity penalties.")
+        print(f"Warning: debiasing_dim ({args.debiasing_dim}) out of range (0-{n_attributes-1}). Not applying debiasing penalties.")
 
     # Keep dataset tensors on CPU; move mini-batches on demand.
     X_cpu = prompt_embeddings_cpu
@@ -464,7 +474,7 @@ def main():
             with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
                 gating_weights = gating_network(X_batch)
                 # Predicted score per candidate: sum((Z @ W^T) * gating_weights).
-                # Apply verbosity debiasing transform before combining with gating weights.
+                # Apply debiasing transform before combining with gating weights.
                 pred_scores = torch.sum((Z_batch @ regression_layer.T @ reward_transform_matrix) * gating_weights, dim=-1)
                 # Pairwise preference loss: chosen should score higher than rejected.
                 loss = loss_fn(pred_scores[:, 0] - pred_scores[:, 1], torch.ones_like(pred_scores[:, 0]))

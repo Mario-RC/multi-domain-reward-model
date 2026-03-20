@@ -60,15 +60,16 @@ def _build_defaults_from_config(config: dict, model_path: str, args=None):
     )
     _ref_cli = (getattr(args, "reference_dataset_name", None) if args else None)
     if _ref_cli and _ref_cli.lower() == "null":
-        # CLI explicitly said "null" → use preference_base for checkpoint naming.
-        reference_base = preference_base
+        # CLI explicitly said "null" → no reference dataset was used during training.
+        reference_base = "null"
     elif _ref_cli:
         reference_base = _ref_cli
     else:
-        reference_base = (
-            stage3_cfg.get("reference_dataset_name")
-            or preference_base
-        )
+        _ref_cfg = stage3_cfg.get("reference_dataset_name")
+        if _ref_cfg is None or str(_ref_cfg).lower() == "null":
+            reference_base = "null"
+        else:
+            reference_base = _ref_cfg
 
     stage1_weights_path = os.path.join(
         "model", "regression_weights", f"{model_name}_{multi_objective_dataset_name}.pt"
