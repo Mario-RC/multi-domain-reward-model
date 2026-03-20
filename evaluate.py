@@ -113,7 +113,7 @@ def evaluate_scoring(model, tokenizer, data_path, device, max_length, max_sample
     records = load_jsonl_test(data_path)
     if not records:
         print(f"No test records found in {data_path}")
-        return
+        return {}
     if max_samples and max_samples < len(records):
         records = records[:max_samples]
 
@@ -159,7 +159,7 @@ def evaluate_scoring(model, tokenizer, data_path, device, max_length, max_sample
 
     if evaluated == 0:
         print("  No valid samples evaluated.")
-        return
+        return {}
 
     # Per-attribute metrics
     header = f"  {'Attribute':<42} {'N':>6} {'MSE':>8} {'Pearson':>8} {'Spearman':>9}"
@@ -168,6 +168,7 @@ def evaluate_scoring(model, tokenizer, data_path, device, max_length, max_sample
 
     mses, pearsons, spearmans = [], [], []
     domain_metrics: dict[str, list[tuple[float, float, float]]] = {}
+    results_attr = {}
 
     for attr in ATTRIBUTES:
         p = np.array(attr_pred[attr])
@@ -182,6 +183,7 @@ def evaluate_scoring(model, tokenizer, data_path, device, max_length, max_sample
         mses.append(mse)
         pearsons.append(r_p)
         spearmans.append(r_s)
+        results_attr[attr] = {"n": n, "mse": round(mse, 6), "pearson": round(float(r_p), 6), "spearman": round(float(r_s), 6)}
         print(f"  {attr:<42} {n:>6} {mse:>8.4f} {r_p:>8.4f} {r_s:>9.4f}")
 
         for domain_name, prefix in DOMAIN_PREFIXES.items():
@@ -193,20 +195,40 @@ def evaluate_scoring(model, tokenizer, data_path, device, max_length, max_sample
         print(f"  {'AVERAGE':<42} {'':>6} {np.mean(mses):>8.4f} {np.mean(pearsons):>8.4f} {np.mean(spearmans):>9.4f}")
 
     # Per-domain summary
+    results_domain = {}
     if domain_metrics:
         print(f"\n  {'Domain':<20} {'MSE':>8} {'Pearson':>8} {'Spearman':>9}")
         print(f"  {'-' * 49}")
         for domain_name in sorted(domain_metrics):
             vals = domain_metrics[domain_name]
-            dm = np.mean([v[0] for v in vals])
-            dp = np.mean([v[1] for v in vals])
-            ds = np.mean([v[2] for v in vals])
+            dm = float(np.mean([v[0] for v in vals]))
+            dp = float(np.mean([v[1] for v in vals]))
+            ds = float(np.mean([v[2] for v in vals]))
+            results_domain[domain_name] = {"mse": round(dm, 6), "pearson": round(dp, 6), "spearman": round(ds, 6)}
             print(f"  {domain_name:<20} {dm:>8.4f} {dp:>8.4f} {ds:>9.4f}")
 
     # Global score distribution
     scores_arr = np.array(all_scores)
     print(f"\n  Global score stats — mean: {scores_arr.mean():.4f}  std: {scores_arr.std():.4f}"
           f"  min: {scores_arr.min():.4f}  max: {scores_arr.max():.4f}")
+
+    return {
+        "evaluated": evaluated,
+        "skipped": skipped,
+        "attributes": results_attr,
+        "domains": results_domain,
+        "average": {
+            "mse": round(float(np.mean(mses)), 6) if mses else None,
+            "pearson": round(float(np.mean(pearsons)), 6) if pearsons else None,
+            "spearman": round(float(np.mean(spearmans)), 6) if spearmans else None,
+        },
+        "global_score": {
+            "mean": round(float(scores_arr.mean()), 6),
+            "std": round(float(scores_arr.std()), 6),
+            "min": round(float(scores_arr.min()), 6),
+            "max": round(float(scores_arr.max()), 6),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +239,7 @@ def evaluate_preference(model, tokenizer, data_path, device, max_length, max_sam
     records = load_jsonl_test(data_path)
     if not records:
         print(f"No test records found in {data_path}")
-        return
+        return {}
     if max_samples and max_samples < len(records):
         records = records[:max_samples]
 
@@ -275,7 +297,7 @@ def evaluate_preference(model, tokenizer, data_path, device, max_length, max_sam
 
     if total == 0:
         print("  No valid pairs evaluated.")
-        return
+        return {}
 
     margins_arr = np.array(margins)
     print(f"\n  Overall accuracy: {correct}/{total}  ({100 * correct / total:.2f}%)")
@@ -283,20 +305,36 @@ def evaluate_preference(model, tokenizer, data_path, device, max_length, max_sam
     print(f"  Margin stats — mean: {margins_arr.mean():.4f}  std: {margins_arr.std():.4f}")
 
     # Per-domain
+    results_domain = {}
     if domain_stats:
         print(f"\n  {'Domain':<25} {'Accuracy':>10} {'Correct':>9} {'Total':>7} {'Ties':>6}")
         print(f"  {'-' * 61}")
         for d in sorted(domain_stats):
             c, t, ti = domain_stats[d]
+            results_domain[d] = {"accuracy": round(100 * c / t, 4), "correct": c, "total": t, "ties": ti}
             print(f"  {d:<25} {100 * c / t:>9.2f}% {c:>9} {t:>7} {ti:>6}")
 
     # Per-difficulty
+    results_difficulty = {}
     if difficulty_stats:
         print(f"\n  {'Difficulty':<25} {'Accuracy':>10} {'Correct':>9} {'Total':>7} {'Ties':>6}")
         print(f"  {'-' * 61}")
         for d in sorted(difficulty_stats):
             c, t, ti = difficulty_stats[d]
+            results_difficulty[d] = {"accuracy": round(100 * c / t, 4), "correct": c, "total": t, "ties": ti}
             print(f"  {d:<25} {100 * c / t:>9.2f}% {c:>9} {t:>7} {ti:>6}")
+
+    return {
+        "total": total,
+        "correct": correct,
+        "ties": ties,
+        "skipped": skipped,
+        "accuracy": round(100 * correct / total, 4),
+        "margin_mean": round(float(margins_arr.mean()), 6),
+        "margin_std": round(float(margins_arr.std()), 6),
+        "domains": results_domain,
+        "difficulty": results_difficulty,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +359,7 @@ def main() -> None:
     parser.add_argument("--max_samples", type=int, default=None, help="Cap per evaluation (for quick debugging).")
     parser.add_argument("--skip_scoring", action="store_true", help="Skip scoring evaluation.")
     parser.add_argument("--skip_preference", action="store_true", help="Skip preference evaluation.")
+    parser.add_argument("--output_json", type=str, default=None, help="Save evaluation results to a JSON file.")
 
     args = parser.parse_args()
     config = load_yaml_config(args.config_path)
@@ -349,15 +388,26 @@ def main() -> None:
     device = next(model.parameters()).device
 
     # Run evaluations
+    results = {"model": path}
+
     if not args.skip_scoring:
-        evaluate_scoring(model, tokenizer, args.scoring_data_path, device, args.max_length, args.max_samples)
+        results["scoring"] = evaluate_scoring(model, tokenizer, args.scoring_data_path, device, args.max_length, args.max_samples)
 
     if not args.skip_preference:
-        evaluate_preference(model, tokenizer, args.preference_data_path, device, args.max_length, args.max_samples)
+        results["preference"] = evaluate_preference(model, tokenizer, args.preference_data_path, device, args.max_length, args.max_samples)
+
+    # Save results to JSON if requested.
+    if args.output_json:
+        os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
+        with open(args.output_json, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        print(f"\n  Results saved to {args.output_json}")
 
     print(f"\n{'=' * 70}")
     print("  Done.")
     print(f"{'=' * 70}")
+
+    return results
 
 
 if __name__ == "__main__":
