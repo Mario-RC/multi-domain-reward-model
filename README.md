@@ -188,6 +188,7 @@ python3 stage-3_package_model.py \
 python3 evaluate.py \
   --model_name multi-domain-rm-llama-3-8b-it
 ```
+Results are auto-saved to `model/multi-domain-rm-llama-3-8b-it/results/eval.json`.
 
 ### Run quick prediction comparison
 ```bash
@@ -200,8 +201,9 @@ python3 predict.py \
 Inspect inter-attribute and attribute-vs-length correlations in the scoring data. Helps decide whether `--debiasing_dim` is needed and which dimension to target.
 
 ```bash
-python3 analyze_correlations.py
-python3 analyze_correlations.py --threshold 0.3   # stricter threshold
+python3 analyze_correlations.py \
+  --dataset_path data/Multi-Domain-Data-Scoring.jsonl \
+  --threshold 0.5
 ```
 
 Output sections:
@@ -210,45 +212,38 @@ Output sections:
 - **Dimension dominance summary** — Which attributes appear in the most high-correlation pairs (candidates for `--debiasing_dim`).
 - **Length bias warning** — Attributes whose length correlation exceeds the threshold.
 
-### Compare models
-
-Evaluate all packaged models and produce side-by-side comparison tables.
-
-```bash
-# Evaluate all models in model/ and generate tables:
-python3 compare_models.py
-
-# Quick test with 50 samples:
-python3 compare_models.py --max_samples 50
-
-# Re-print tables from cached results (no GPU needed):
-python3 compare_models.py --cached
-
-# Compare specific models only:
-python3 compare_models.py --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it
-```
-
-Results are saved as JSON in `results/<model_name>.json`. Output tables include:
-- **Preference accuracy** — Overall, per-domain, per-difficulty, and mean margin.
-- **Scoring regression** — Spearman/Pearson/MSE per domain and per attribute.
-- **Global score distribution** — mean/std/min/max of the final scalar reward.
-- **Markdown summary** — Copy-paste ready tables for documentation.
-
 ### Evaluate baseline (no regression)
 
-Evaluate a base reward model using its native reward score (no stage-1 regression weights).
+Evaluate a base reward model using its native reward score (no stage-1 regression weights). Use `--model_name` to save results as `eval_baseline.json` inside the corresponding packaged model's results directory.
 
 ```bash
 # Scalar RM — scoring + preference (LLaMA3, Gemma2)
 python3 evaluate_baseline.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
-  --no_regression
+  --no_regression \
+  --model_name multi-domain-rm-llama-3-8b-it
 
 # Generative judge — preference only (BRRM)
 python3 evaluate_baseline.py \
   --model_path nvidia/Qwen3-Nemotron-8B-BRRM \
   --generative_judge --skip_scoring \
+  --model_name multi-domain-rm-qwen-3-8b-it
 ```
+Results are saved to `model/<model_name>/results/eval_baseline.json`.
+
+### Compare models
+
+Load pre-computed results from all models and produce side-by-side comparison tables, CSVs, and plots.
+
+```bash
+python3 benchmark.py \
+  --model_parent_dir model
+```
+
+Discovers all models in `model/` that have `results/eval.json` or `results/eval_baseline.json`. Output includes:
+- **Comparison tables** — Preference accuracy, scoring regression, global score distribution.
+- **CSVs** — Saved to `model/benchmark/`.
+- **Plots** — Comparative plots in `model/benchmark/`, per-model plots in `model/<model_name>/results/plots/`.
 
 ---
 
@@ -269,7 +264,7 @@ python3 stage-3_package_model.py --config_path config.yaml
 python3 evaluate.py --config_path config.yaml
 python3 predict.py --config_path config.yaml
 python3 analyze_correlations.py --config_path config.yaml
-python3 compare_models.py --config_path config.yaml
+python3 benchmark.py --config_path config.yaml
 python3 evaluate_baseline.py --config_path config.yaml
 ```
 
@@ -299,10 +294,18 @@ model/
 ├── regression_weights/
 │   └── <model_name>_<multi_objective_dataset_name>.pt
 │
-└── multi-domain-rm-<model_name>/
-  ├── config.json
-  ├── model-00001-of-0000X.safetensors
-  └── ...
+├── multi-domain-rm-<model_name>/
+│   ├── config.json
+│   ├── model-00001-of-0000X.safetensors
+│   ├── ...
+│   └── results/
+│       ├── eval.json
+│       ├── eval_baseline.json
+│       └── plots/
+│
+└── benchmark/
+    ├── *.csv
+    └── *.png
 ```
 
 ---

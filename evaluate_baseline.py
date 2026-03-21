@@ -154,7 +154,7 @@ def evaluate_scoring(model, tokenizer, records, device, max_length, pad_token_id
 
     if evaluated == 0:
         print("  No valid samples evaluated.")
-        return
+        return {}
 
     header = f"  {'Attribute':<42} {'N':>6} {'MSE':>8} {'Pearson':>8} {'Spearman':>9}"
     print(f"\n{header}")
@@ -162,6 +162,7 @@ def evaluate_scoring(model, tokenizer, records, device, max_length, pad_token_id
 
     mses, pearsons, spearmans = [], [], []
     domain_metrics: dict[str, list[tuple[float, float, float]]] = {}
+    results_attr = {}
 
     for attr in ATTRIBUTES:
         p = np.array(attr_pred[attr])
@@ -176,6 +177,7 @@ def evaluate_scoring(model, tokenizer, records, device, max_length, pad_token_id
         mses.append(mse)
         pearsons.append(r_p)
         spearmans.append(r_s)
+        results_attr[attr] = {"n": n, "mse": round(mse, 6), "pearson": round(float(r_p), 6), "spearman": round(float(r_s), 6)}
         print(f"  {attr:<42} {n:>6} {mse:>8.4f} {r_p:>8.4f} {r_s:>9.4f}")
 
         for domain_name, prefix in DOMAIN_PREFIXES.items():
@@ -186,15 +188,29 @@ def evaluate_scoring(model, tokenizer, records, device, max_length, pad_token_id
         print(f"  {'-' * 78}")
         print(f"  {'AVERAGE':<42} {'':>6} {np.mean(mses):>8.4f} {np.mean(pearsons):>8.4f} {np.mean(spearmans):>9.4f}")
 
+    results_domain = {}
     if domain_metrics:
         print(f"\n  {'Domain':<20} {'MSE':>8} {'Pearson':>8} {'Spearman':>9}")
         print(f"  {'-' * 49}")
         for domain_name in sorted(domain_metrics):
             vals = domain_metrics[domain_name]
-            dm = np.mean([v[0] for v in vals])
-            dp = np.mean([v[1] for v in vals])
-            ds = np.mean([v[2] for v in vals])
+            dm = float(np.mean([v[0] for v in vals]))
+            dp = float(np.mean([v[1] for v in vals]))
+            ds = float(np.mean([v[2] for v in vals]))
+            results_domain[domain_name] = {"mse": round(dm, 6), "pearson": round(dp, 6), "spearman": round(ds, 6)}
             print(f"  {domain_name:<20} {dm:>8.4f} {dp:>8.4f} {ds:>9.4f}")
+
+    return {
+        "evaluated": evaluated,
+        "skipped": skipped,
+        "attributes": results_attr,
+        "domains": results_domain,
+        "average": {
+            "mse": round(float(np.mean(mses)), 6) if mses else None,
+            "pearson": round(float(np.mean(pearsons)), 6) if pearsons else None,
+            "spearman": round(float(np.mean(spearmans)), 6) if spearmans else None,
+        },
+    }
 
 
 def evaluate_preference(model, tokenizer, records, device, max_length, pad_token_id):
@@ -254,26 +270,42 @@ def evaluate_preference(model, tokenizer, records, device, max_length, pad_token
 
     if total == 0:
         print("  No valid pairs evaluated.")
-        return
+        return {}
 
     margins_arr = np.array(margins)
     print(f"\n  Overall accuracy: {correct}/{total}  ({100 * correct / total:.2f}%)")
     print(f"  Ties (chosen == rejected): {ties}")
     print(f"  Margin stats — mean: {margins_arr.mean():.4f}  std: {margins_arr.std():.4f}")
 
+    results_domain = {}
     if domain_stats:
         print(f"\n  {'Domain':<25} {'Accuracy':>10} {'Correct':>9} {'Total':>7} {'Ties':>6}")
         print(f"  {'-' * 61}")
         for d in sorted(domain_stats):
             c, t, ti = domain_stats[d]
+            results_domain[d] = {"accuracy": round(100 * c / t, 4), "correct": c, "total": t, "ties": ti}
             print(f"  {d:<25} {100 * c / t:>9.2f}% {c:>9} {t:>7} {ti:>6}")
 
+    results_difficulty = {}
     if difficulty_stats:
         print(f"\n  {'Difficulty':<25} {'Accuracy':>10} {'Correct':>9} {'Total':>7} {'Ties':>6}")
         print(f"  {'-' * 61}")
         for d in sorted(difficulty_stats):
             c, t, ti = difficulty_stats[d]
+            results_difficulty[d] = {"accuracy": round(100 * c / t, 4), "correct": c, "total": t, "ties": ti}
             print(f"  {d:<25} {100 * c / t:>9.2f}% {c:>9} {t:>7} {ti:>6}")
+
+    return {
+        "total": total,
+        "correct": correct,
+        "ties": ties,
+        "skipped": skipped,
+        "accuracy": round(100 * correct / total, 4),
+        "margin_mean": round(float(margins_arr.mean()), 6),
+        "margin_std": round(float(margins_arr.std()), 6),
+        "domains": results_domain,
+        "difficulty": results_difficulty,
+    }
 
 
 BRRM_TURN1_TEMPLATE = """You are a response quality evaluator. Given the context of the conversation (the last turn is the User's query) and two responses from the Assistant, you should compare the difference of two model responses, select the most important cognitive abilities for this query, and analyze critical issues in each response.
@@ -466,24 +498,62 @@ def evaluate_preference_generative(model, tokenizer, records, device, max_gen_to
 
     if total == 0:
         print("  No valid pairs evaluated.")
-        return
+        return {}
 
     print(f"\n  Overall accuracy: {correct}/{total}  ({100 * correct / total:.2f}%)")
     print(f"  Parse failure rate: {parse_failures}/{total + parse_failures}  ({100 * parse_failures / (total + parse_failures):.1f}%)")
 
+    results_domain = {}
     if domain_stats:
         print(f"\n  {'Domain':<25} {'Accuracy':>10} {'Correct':>9} {'Total':>7}")
         print(f"  {'-' * 55}")
         for d in sorted(domain_stats):
             c, t = domain_stats[d]
+            results_domain[d] = {"accuracy": round(100 * c / t, 4), "correct": c, "total": t}
             print(f"  {d:<25} {100 * c / t:>9.2f}% {c:>9} {t:>7}")
 
+    results_difficulty = {}
     if difficulty_stats:
         print(f"\n  {'Difficulty':<25} {'Accuracy':>10} {'Correct':>9} {'Total':>7}")
         print(f"  {'-' * 55}")
         for d in sorted(difficulty_stats):
             c, t = difficulty_stats[d]
+            results_difficulty[d] = {"accuracy": round(100 * c / t, 4), "correct": c, "total": t}
             print(f"  {d:<25} {100 * c / t:>9.2f}% {c:>9} {t:>7}")
+
+    return {
+        "total": total,
+        "correct": correct,
+        "parse_failures": parse_failures,
+        "skipped": skipped,
+        "accuracy": round(100 * correct / total, 4),
+        "domains": results_domain,
+        "difficulty": results_difficulty,
+    }
+
+
+def _save_results(results, args):
+    """Save results JSON to model_parent_dir/<model_name>/results/eval_baseline.json."""
+    if not args.model_name:
+        print("\n  WARNING: --model_name not set, skipping auto-save. Use --model_name to save results.")
+        if args.output_json:
+            os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
+            with open(args.output_json, "w", encoding="utf-8") as f:
+                json.dump(results, f, indent=2, ensure_ascii=False)
+            print(f"\n  Results saved to {args.output_json}")
+        return
+
+    output_paths = []
+    if args.output_json:
+        output_paths.append(args.output_json)
+    auto_json = os.path.join(args.model_parent_dir, args.model_name, "results", "eval_baseline.json")
+    if auto_json not in output_paths:
+        output_paths.append(auto_json)
+    for out_path in output_paths:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(results, f, indent=2, ensure_ascii=False)
+        print(f"\n  Results saved to {out_path}")
 
 
 def main() -> None:
@@ -501,6 +571,9 @@ def main() -> None:
     parser.add_argument("--skip_preference", action="store_true", help="Skip preference evaluation.")
     parser.add_argument("--generative_judge", action="store_true", help="Use generative judge (e.g. BRRM) for preference evaluation. Loads model as CausalLM.")
     parser.add_argument("--max_gen_tokens", type=int, default=8192, help="Max new tokens per generation turn (generative judge mode).")
+    parser.add_argument("--model_name", type=str, default=None, help="Packaged model dir name (e.g. multi-domain-rm-llama-3-8b-it). Results saved to model/<model_name>/results/eval_baseline.json.")
+    parser.add_argument("--model_parent_dir", type=str, default="model", help="Parent directory for saving results.")
+    parser.add_argument("--output_json", type=str, default=None, help="Custom path to save results JSON.")
     args = parser.parse_args()
 
     config = load_yaml_config(args.config_path)
@@ -546,14 +619,16 @@ def main() -> None:
         tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=trust_remote)
         model.eval()
 
+        results = {"model": args.model_path, "type": "baseline_generative"}
         pref_records = load_jsonl_test(args.preference_data_path)
         if not pref_records:
             print("No preference test records found.")
         else:
             if args.max_samples and args.max_samples < len(pref_records):
                 pref_records = pref_records[:args.max_samples]
-            evaluate_preference_generative(model, tokenizer, pref_records, device, args.max_gen_tokens)
+            results["preference"] = evaluate_preference_generative(model, tokenizer, pref_records, device, args.max_gen_tokens)
 
+        _save_results(results, args)
         print(f"\n{'=' * 70}")
         print("  Done.")
         print(f"{'=' * 70}")
@@ -595,6 +670,9 @@ def main() -> None:
     if reg_weight is not None:
         reg_weight = reg_weight.to(device=device, dtype=dtype)
 
+    baseline_type = "baseline_no_regression" if no_regression else "baseline_regression"
+    results = {"model": args.model_path, "type": baseline_type}
+
     # Scoring evaluation
     if not args.skip_scoring:
         scoring_records = load_jsonl_test(args.scoring_data_path)
@@ -603,8 +681,8 @@ def main() -> None:
         else:
             if args.max_samples and args.max_samples < len(scoring_records):
                 scoring_records = scoring_records[:args.max_samples]
-            evaluate_scoring(model, tokenizer, scoring_records, device, args.max_length,
-                           pad_token_id, no_regression, reg_weight)
+            results["scoring"] = evaluate_scoring(model, tokenizer, scoring_records, device, args.max_length,
+                                                  pad_token_id, no_regression, reg_weight)
 
     # Preference evaluation (only with --no_regression, needs scalar reward)
     if not args.skip_preference and no_regression:
@@ -614,10 +692,11 @@ def main() -> None:
         else:
             if args.max_samples and args.max_samples < len(pref_records):
                 pref_records = pref_records[:args.max_samples]
-            evaluate_preference(model, tokenizer, pref_records, device, args.max_length, pad_token_id)
+            results["preference"] = evaluate_preference(model, tokenizer, pref_records, device, args.max_length, pad_token_id)
     elif not args.skip_preference and not no_regression:
         print("\n  (Preference evaluation skipped — requires --no_regression or --generative)")
 
+    _save_results(results, args)
     print(f"\n{'=' * 70}")
     print("  Done.")
     print(f"{'=' * 70}")

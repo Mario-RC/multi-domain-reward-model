@@ -396,12 +396,25 @@ def main() -> None:
     if not args.skip_preference:
         results["preference"] = evaluate_preference(model, tokenizer, args.preference_data_path, device, args.max_length, args.max_samples)
 
-    # Save results to JSON if requested.
+    # Save results to JSON — always save to model results dir, optionally also to custom path.
+    output_paths = []
     if args.output_json:
-        os.makedirs(os.path.dirname(args.output_json) or ".", exist_ok=True)
-        with open(args.output_json, "w", encoding="utf-8") as f:
+        output_paths.append(args.output_json)
+
+    # Auto-save to model/<model_name>/results/eval.json
+    model_name = args.model_name
+    if not model_name:
+        # Try to infer from the resolved path
+        model_name = os.path.basename(path.rstrip("/"))
+    auto_json = os.path.join(args.model_parent_dir, model_name, "results", "eval.json")
+    if auto_json not in output_paths:
+        output_paths.append(auto_json)
+
+    for out_path in output_paths:
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
-        print(f"\n  Results saved to {args.output_json}")
+        print(f"\n  Results saved to {out_path}")
 
     print(f"\n{'=' * 70}")
     print("  Done.")

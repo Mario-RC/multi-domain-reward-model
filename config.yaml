@@ -112,9 +112,8 @@ analyze_correlations:
 
 # --- Compare models ---
 
-compare_models:
+benchmark:
   model_parent_dir: model
-  results_dir: results
   max_samples: null
   max_length: 4096
 
@@ -129,6 +128,8 @@ compare_models:
 
 evaluate_baseline:
   model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
+  model_name: multi-domain-rm-llama-3-8b-it
+  model_parent_dir: model
   scoring_data_path: data/Multi-Domain-Data-Scoring
   preference_data_path: data/Multi-Domain-Data-Preference-Pairs
   dataset_name: Multi-Domain-Data-Scoring
