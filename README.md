@@ -236,14 +236,14 @@ Results are saved to `model/<model_name>/results/eval_baseline.json`.
 Load pre-computed results from all models and produce side-by-side comparison tables, CSVs, and plots.
 
 ```bash
-python3 benchmark.py \
+python3 compare_models.py \
   --model_parent_dir model
 ```
 
 Discovers all models in `model/` that have `results/eval.json` or `results/eval_baseline.json`. Output includes:
 - **Comparison tables** — Preference accuracy, scoring regression, global score distribution.
-- **CSVs** — Saved to `model/benchmark/`.
-- **Plots** — Comparative plots in `model/benchmark/`, per-model plots in `model/<model_name>/results/plots/`.
+- **CSVs** — Saved to `model/compare_models/`.
+- **Plots** — Comparative plots in `model/compare_models/`, per-model plots in `model/<model_name>/results/plots/`.
 
 ---
 
@@ -296,7 +296,7 @@ model/
 │       ├── eval_baseline.json
 │       └── plots/
 │
-└── benchmark/
+└── compare_models/
     ├── *.csv
     └── *.png
 ```
