@@ -157,19 +157,22 @@ python3 stage-2_train.py \
   --multi_objective_dataset_name Multi-Domain-Data-Scoring \
   --preference_dataset_name Multi-Domain-Data-Preference-Pairs \
   --reference_dataset_name null \
-  --debiasing_dim -1 \
+  --debiasing_dims -1 \
+  --temperature 10.0 \
+  --n_steps 2000 \
+  --seed 0 \
   --dataset_split train \
   --eval reward-bench \
   --device 0
 ```
 
-> **Reference dataset and `debiasing_dim`:** The reference dataset is only used when `debiasing_dim >= 0`. If `debiasing_dim` is `-1` (disabled), the reference dataset will **not** be loaded or used, even if provided.
+> **Reference dataset and `debiasing_dims`:** The reference dataset is only used when `debiasing_dims` contains indices >= 0. If `debiasing_dims` is `-1` (disabled), the reference dataset will **not** be loaded or used, even if provided.
 >
-> `debiasing_dim` points to any attribute dimension whose influence you want to decorrelate from the rest. For each other dimension *d*, it finds the smallest penalty *p* such that `adjusted_d = d - p * target_dim` has a Spearman correlation with the target dimension below `corr_threshold`. The result is a `reward_transform_matrix` that subtracts the leaking influence of the chosen dimension before the gating network combines scores.
+> `debiasing_dims` accepts one or more attribute dimension indices whose influence you want to decorrelate from the rest. For each target dimension and each other dimension *d*, it finds the smallest penalty *p* such that `adjusted_d = d - p * target_dim` has a Spearman correlation with the target dimension below `corr_threshold`. The result is a `reward_transform_matrix` that subtracts the leaking influence of the chosen dimensions before the gating network combines scores.
 >
 > Examples:
-> - In ArmoRM's original setup, `debiasing_dim=4` pointed to `helpsteer-verbosity` to prevent longer responses from inflating all reward scores.
-> - In a multi-domain setup, you could set `debiasing_dim` to a dominant dimension (e.g. a coherence or cultural attribute) if you observe it correlating too strongly with others in the reference dataset.
+> - In ArmoRM's original setup, `debiasing_dims 4` pointed to `helpsteer-verbosity` to prevent longer responses from inflating all reward scores.
+> - In a multi-domain setup, you could set `debiasing_dims` to one or more dominant dimensions (e.g. `--debiasing_dims 21 18` for cultural and empathy attributes) if you observe them correlating too strongly with others in the reference dataset.
 
 ### Stage 3 Packaging Model
 ```bash
@@ -179,9 +182,12 @@ python3 stage-3_package_model.py \
   --multi_objective_dataset_name Multi-Domain-Data-Scoring \
   --preference_dataset_name Multi-Domain-Data-Preference-Pairs \
   --reference_dataset_name null \
+  --temperature 10.0 \
+  --n_steps 2000 \
+  --seed 0 \
   --output_model_name multi-domain-rm-llama-3-8b-it
 ```
-> `--reference_dataset_name` must match the value used during Stage 2 training so the correct checkpoint file is found. Pass `null` if Stage 2 was trained without a reference dataset.
+> `--reference_dataset_name`, `--temperature`, `--n_steps` and `--seed` must match the values used during Stage 2 training so the correct checkpoint file is found. Pass `null` for reference_dataset_name if Stage 2 was trained without a reference dataset.
 
 ### Evaluate the packaged model
 ```bash
@@ -237,7 +243,8 @@ Load pre-computed results from all models and produce side-by-side comparison ta
 
 ```bash
 python3 compare_models.py \
-  --model_parent_dir model
+  --model_parent_dir model \
+  --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it multi-domain-rm-qwen-3-8b-it
 ```
 
 Discovers all models in `model/` that have `results/eval.json` or `results/eval_baseline.json`. Output includes:
