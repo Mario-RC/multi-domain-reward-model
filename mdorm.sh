@@ -54,7 +54,10 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
   --multi_objective_dataset_name Multi-Domain-Data-Scoring \
   --preference_dataset_name Multi-Domain-Data-Preference-Pairs \
   --reference_dataset_name null \
-  --debiasing_dim -1 \
+  --debiasing_dims -1 \
+  --temperature 10.0 \
+  --n_steps 2000 \
+  --seed 0 \
   --dataset_split train \
   --eval reward-bench \
   --device 0
@@ -67,6 +70,9 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-3_package_model.py \
   --multi_objective_dataset_name Multi-Domain-Data-Scoring \
   --preference_dataset_name Multi-Domain-Data-Preference-Pairs \
   --reference_dataset_name null \
+  --temperature 10.0 \
+  --n_steps 2000 \
+  --seed 0 \
   --output_model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################
@@ -93,6 +99,7 @@ CUDA_VISIBLE_DEVICES=0 python3 evaluate_baseline.py \
   --model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################
-### benchmark ###
-python3 benchmark.py \
-  --model_parent_dir model
+### compare models ###
+python3 compare_models.py \
+  --model_parent_dir model \
+  --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it multi-domain-rm-qwen-3-8b-it
