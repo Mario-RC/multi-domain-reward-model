@@ -12,13 +12,13 @@ Workflow:
 
 Usage:
     # Auto-discover all packaged models:
-    python3 benchmark.py
+    python3 compare_models.py
 
     # Compare specific models:
-    python3 benchmark.py --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it
+    python3 compare_models.py --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it
 
     # Custom model directory:
-    python3 benchmark.py --model_parent_dir model
+    python3 compare_models.py --model_parent_dir model
 """
 
 import csv
@@ -32,8 +32,10 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from datetime import datetime
 from attributes import ATTRIBUTES, DOMAIN_PREFIXES
 
+print(f"\n### Compare Models started at {datetime.now().isoformat()} ###")
 
 DEFAULT_MODEL_PARENT_DIR = "model"
 
@@ -565,7 +567,7 @@ def export_csvs(all_results, output_dir):
 def generate_plots(all_results, model_parent_dir):
     """Generate all plots and save to each model's results/plots/ dir."""
     # Use a shared dir for comparative plots (inside model_parent_dir).
-    shared_plots_dir = os.path.join(model_parent_dir, "benchmark")
+    shared_plots_dir = os.path.join(model_parent_dir, "compare_models")
 
     print(f"\n{'=' * 90}")
     print("  GENERATING PLOTS")
@@ -699,7 +701,7 @@ def main():
     print_markdown_summary(all_results)
 
     # Export CSVs and generate plots
-    output_dir = os.path.join(args.model_parent_dir, "benchmark")
+    output_dir = os.path.join(args.model_parent_dir, "compare_models")
     export_csvs(all_results, output_dir)
 
     if not args.no_plots:
