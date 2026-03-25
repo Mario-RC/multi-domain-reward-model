@@ -1,6 +1,6 @@
 # Multi-Domain Model
 
-This directory contains my custom version of ArmoRM to train a multi-objective reward model using custom data and a data preparation pipeline adapted to my workflow.
+This directory contains a custom version of [ArmoRM](https://github.com/RLHFlow/RLHF-Reward-Modeling/tree/main/armo-rm) adapted to train a multi-objective reward model using custom data that evaluates responses across four complementary domains: **Coherence** , **Commonsense** , **Empathy** and **Multicultural**. The model learns 23 fine-grained attributes spanning these domains and combines them through a prompt-conditioned gating network to produce a single preference score, enabling reward evaluation that captures domain-specific nuances.
 
 ## Project Goal
 
