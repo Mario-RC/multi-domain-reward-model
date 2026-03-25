@@ -548,9 +548,14 @@ def main():
     # --- Save model checkpoint ---
     save_dir = os.path.join(BASE_DATA_DIR, "gating_network")
     os.makedirs(save_dir, exist_ok=True)
+    # Build checkpoint name — append non-default hyperparams to avoid breaking old checkpoints
+    _hp_defaults = {"learning_rate": 0.001, "weight_decay": 0.0, "n_hidden": 3, "hidden_size": 1024, "dropout": 0.2}
+    _hp_suffix = "".join(
+        f"_{k[:2]}{getattr(args, k)}" for k, v in _hp_defaults.items() if getattr(args, k) != v
+    )
     unique_name = (
         f"gating_network_{args.model_name}_mo_{args.multi_objective_dataset_name}_"
-        f"pref_{pref_base}_ref_{ref_base}_T{args.temperature:.1f}_N{args.n_steps}_seed{args.seed}"
+        f"pref_{pref_base}_ref_{ref_base}_t{args.temperature:.1f}_n{args.n_steps}_seed{args.seed}{_hp_suffix}"
     )
     save_path = os.path.join(save_dir, f"{unique_name}.pt")
     torch.save({

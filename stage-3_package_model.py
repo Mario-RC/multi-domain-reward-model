@@ -78,7 +78,13 @@ def _build_defaults_from_config(config: dict, model_path: str, args=None):
         (
             f"gating_network_{model_name}_mo_{multi_objective_dataset_name}_"
             f"pref_{preference_base}_ref_{reference_base}"
-            f"_T{getattr(args, 'temperature', 10.0):.1f}_N{getattr(args, 'n_steps', 2000)}_seed{getattr(args, 'seed', 0)}.pt"
+            f"_t{getattr(args, 'temperature', 10.0):.1f}_n{getattr(args, 'n_steps', 2000)}_seed{getattr(args, 'seed', 0)}"
+            + "".join(
+                f"_{k[:2]}{getattr(args, k)}" for k, v in
+                {"learning_rate": 0.001, "weight_decay": 0.0, "n_hidden": 3, "hidden_size": 1024, "dropout": 0.2}.items()
+                if getattr(args, k, v) != v
+            )
+            + ".pt"
         ),
     )
     model_parent_dir = str(stage3_cfg.get("model_parent_dir", stage3_cfg.get("output_parent_dir", "model")))
@@ -108,6 +114,11 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=10.0, help="Temperature used in stage-2 training (for locating checkpoint).")
     parser.add_argument("--n_steps", type=int, default=2000, help="Number of steps used in stage-2 training (for locating checkpoint).")
     parser.add_argument("--seed", type=int, default=0, help="Seed used in stage-2 training (for locating checkpoint).")
+    parser.add_argument("--learning_rate", type=float, default=0.001, help="Learning rate used in stage-2 (for locating checkpoint).")
+    parser.add_argument("--weight_decay", type=float, default=0.0, help="Weight decay used in stage-2 (for locating checkpoint).")
+    parser.add_argument("--n_hidden", type=int, default=3, help="Hidden layers used in stage-2 (for locating checkpoint).")
+    parser.add_argument("--hidden_size", type=int, default=1024, help="Hidden size used in stage-2 (for locating checkpoint).")
+    parser.add_argument("--dropout", type=float, default=0.2, help="Dropout used in stage-2 (for locating checkpoint).")
     args = parser.parse_args()
 
     config = load_yaml_config(args.config_path)
