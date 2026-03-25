@@ -1,32 +1,19 @@
 """
 Analyze inter-attribute and attribute-vs-length correlations in the scoring dataset.
 
-This script helps decide whether to use --debiasing_dim in stage-2_train.py
+This script helps decide whether to use --debiasing_dims in stage-2_train.py
 by revealing which attribute dimensions correlate with each other and with
 response length.
 
 What it computes:
-  1. Per-attribute non-null counts — shows how many dialogues have scores for
-     each attribute. Because scoring data is domain-specific (each dialogue
-     only has scores for its own domain), cross-domain pairs will always have
-     zero overlap.
-
-  2. Attribute vs response length (Spearman) — detects whether longer
-     assistant responses systematically receive higher or lower scores on
-     any given attribute.  A high positive correlation (e.g. 0.68 for
-     mu_empathy) means the model may reward verbosity rather than quality.
-
-  3. Inter-attribute correlations (Spearman) — for every pair of attributes
-     that share enough non-null rows, computes rank correlation.  Because of
-     the domain-specific scoring, these are effectively within-domain pairs
-     only (e.g. co_* vs co_*, em_* vs em_*).
-
-  4. Dimension dominance summary — counts how many high-correlation pairs
-     each attribute participates in. An attribute with many high-corr pairs
-     may be a "dominant" dimension leaking into others.
-
-  5. Length bias warning — flags attributes whose correlation with response
-     length exceeds the threshold, suggesting they may benefit from debiasing.
+  1. Per-attribute statistics — non-null counts, unique values, range, mean, std.
+  2. Attribute vs response length (Spearman) — detects verbosity bias.
+  3. Inter-attribute correlations (Spearman) — within-domain pair analysis.
+  4. Within-domain correlation matrices — full NxN heatmap per domain.
+  5. PCA dimensionality analysis — effective independent dimensions per domain.
+  6. Dimension dominance summary — which attributes dominate correlation pairs.
+  7. Length bias warning — flags attributes correlated with response length.
+  8. Debiasing recommendations — actionable suggestions based on all analyses.
 
 Correlation method:
   Spearman rank correlation is used throughout (not Pearson) because it
@@ -35,7 +22,7 @@ Correlation method:
 
 Usage:
     python3 analyze_correlations.py
-    python3 analyze_correlations.py --dataset_path data/Multi-Domain-Data-Scoring.jsonl --threshold 0.5
+    python3 analyze_correlations.py --dataset_path data/Multi-Domain-Data-Scoring.jsonl --threshold 0.3
 """
 
 import json
@@ -199,6 +186,90 @@ def domain_of(attr):
     return "unknown"
 
 
+def get_domain_indices():
+    """Return dict mapping domain name -> list of attribute indices."""
+    domains = {}
+    for i, attr in enumerate(ATTRIBUTES):
+        d = domain_of(attr)
+        domains.setdefault(d, []).append(i)
+    return domains
+
+
+def compute_domain_correlation_matrix(scores_by_attr, domain_attrs):
+    """
+    Compute the full Spearman correlation matrix for a set of attributes.
+
+    Only rows where ALL attributes in the set have non-null scores are used.
+    Returns (corr_matrix, n_samples) or (None, 0) if insufficient data.
+    """
+    n = len(domain_attrs)
+    # Collect rows where all attributes are non-null
+    all_vals = []
+    n_rows = len(scores_by_attr[domain_attrs[0]])
+    for row_idx in range(n_rows):
+        row = [scores_by_attr[a][row_idx] for a in domain_attrs]
+        if all(v is not None for v in row):
+            all_vals.append(row)
+
+    if len(all_vals) < 10:
+        return None, 0
+
+    arr = np.array(all_vals)
+    corr_matrix = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            corr_matrix[i, j] = spearmanr(arr[:, i], arr[:, j])[0]
+    return corr_matrix, len(all_vals)
+
+
+def compute_pca_analysis(corr_matrix):
+    """
+    Compute PCA eigenvalue decomposition from a correlation matrix.
+
+    Returns list of dicts with: component, eigenvalue, explained_pct, cumulative_pct.
+    """
+    eigenvalues = np.linalg.eigvalsh(corr_matrix)[::-1]
+    total = eigenvalues.sum()
+    explained = eigenvalues / total * 100
+    cumulative = np.cumsum(explained)
+
+    results = []
+    for k, (ev, exp, cum) in enumerate(zip(eigenvalues, explained, cumulative)):
+        results.append({
+            "component": k + 1,
+            "eigenvalue": ev,
+            "explained_pct": exp,
+            "cumulative_pct": cum,
+        })
+    return results
+
+
+def compute_attribute_stats(scores_by_attr):
+    """
+    Compute per-attribute statistics: n_nonnull, n_unique, min, max, mean, std.
+    """
+    stats = []
+    for i, attr in enumerate(ATTRIBUTES):
+        values = [v for v in scores_by_attr[attr] if v is not None]
+        if not values:
+            stats.append({"idx": i, "attr": attr, "n": 0})
+            continue
+        arr = np.array(values)
+        unique = np.unique(arr)
+        stats.append({
+            "idx": i,
+            "attr": attr,
+            "n": len(values),
+            "n_unique": len(unique),
+            "min": float(arr.min()),
+            "max": float(arr.max()),
+            "mean": float(arr.mean()),
+            "std": float(arr.std()),
+            "domain": domain_of(attr),
+        })
+    return stats
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -208,9 +279,8 @@ def main():
     parser = ArgumentParser(description="Analyze attribute correlations and length bias in scoring data.")
     parser.add_argument("--dataset_path", type=str, default="data/Multi-Domain-Data-Scoring.jsonl",
                         help="Path to the Multi-Domain-Data-Scoring JSONL file.")
-    parser.add_argument("--threshold", type=float, default=0.5,
-                        help="Flag attribute pairs with |corr| above this value. "
-                             "Default 0.5 is a common heuristic for 'strong' correlation.")
+    parser.add_argument("--threshold", type=float, default=0.3,
+                        help="Flag attribute pairs with |corr| above this value.")
     args = parser.parse_args()
 
     # ── Load data ──
@@ -218,41 +288,38 @@ def main():
     scores_by_attr, lengths, domains, n_total = load_scoring_data(args.dataset_path)
     print(f"  Total dialogues: {n_total}")
 
-    # ── Non-null counts ──
-    # Shows the data distribution: how many dialogues per domain have scores.
-    # Each domain contributes ~12,800 dialogues in the standard dataset.
-    print(f"\n{'Attribute':<35} {'Non-null':>8}  {'Domain':<15}")
-    print("-" * 62)
-    for attr in ATTRIBUTES:
-        n = sum(1 for v in scores_by_attr[attr] if v is not None)
-        print(f"  {attr:<33} {n:>8}  {domain_of(attr):<15}")
+    # ── Section 1: Attribute statistics ──
+    attr_stats = compute_attribute_stats(scores_by_attr)
+    print(f"\n{'=' * 100}")
+    print("ATTRIBUTE STATISTICS")
+    print(f"{'=' * 100}")
+    print(f"  {'[idx]':<6} {'Attribute':<35} {'N':>6} {'Unique':>7} {'Min':>6} {'Max':>6} {'Mean':>7} {'Std':>7} {'Domain':<15}")
+    print(f"  {'-' * 97}")
+    for s in attr_stats:
+        if s["n"] == 0:
+            print(f"  [{s['idx']:2d}]  {s['attr']:<35} {0:>6}")
+            continue
+        flag = " LOW-VAR" if s["std"] < 0.10 else ""
+        print(f"  [{s['idx']:2d}]  {s['attr']:<35} {s['n']:>6} {s['n_unique']:>7} {s['min']:>6.2f} {s['max']:>6.2f} "
+              f"{s['mean']:>7.3f} {s['std']:>7.4f} {s['domain']:<15}{flag}")
 
-    # ── Section 1: Attribute vs response length ──
-    # This reveals length bias: do longer responses get systematically
-    # higher or lower scores? If an attribute shows |corr| > threshold,
-    # it may be measuring verbosity rather than true quality.
-    print(f"\n{'=' * 70}")
+    # ── Section 2: Attribute vs response length ──
+    print(f"\n{'=' * 100}")
     print("ATTRIBUTE vs RESPONSE LENGTH (Spearman)")
-    print(f"{'=' * 70}")
+    print(f"{'=' * 100}")
     length_results = compute_length_correlations(scores_by_attr, lengths)
-    # Sort by absolute correlation (strongest first).
     length_results.sort(key=lambda x: abs(x["corr"]), reverse=True)
-    print(f"  {'Attribute':<35} {'Corr':>8} {'p-value':>10} {'N':>7}")
-    print(f"  {'-' * 63}")
+    print(f"  {'[idx]':<6} {'Attribute':<35} {'Corr':>8} {'p-value':>10} {'N':>7}")
+    print(f"  {'-' * 69}")
     for r in length_results:
-        # Mark attributes that exceed the threshold with ***.
+        idx = ATTRIBUTES.index(r["attr"])
         flag = " ***" if abs(r["corr"]) > args.threshold else ""
-        print(f"  {r['attr']:<35} {r['corr']:>8.4f} {r['pval']:>10.2e} {r['n']:>7}{flag}")
+        print(f"  [{idx:2d}]  {r['attr']:<35} {r['corr']:>8.4f} {r['pval']:>10.2e} {r['n']:>7}{flag}")
 
-    # ── Section 2: Inter-attribute correlations ──
-    # Shows which attributes move together. High correlations within a
-    # domain are expected (e.g. co_mutual_grounding and co_overall_coherence
-    # at 0.93). Cross-domain correlations would be more concerning but
-    # cannot appear here because scores are domain-specific (null overlap).
-    print(f"\n{'=' * 70}")
-    print("INTER-ATTRIBUTE CORRELATIONS (Spearman)")
-    print(f"  (only pairs with |corr| > {args.threshold} shown in detail)")
-    print(f"{'=' * 70}")
+    # ── Section 3: Inter-attribute correlations ──
+    print(f"\n{'=' * 100}")
+    print(f"INTER-ATTRIBUTE CORRELATIONS (Spearman, |corr| > {args.threshold})")
+    print(f"{'=' * 100}")
     pairwise_results = compute_pairwise_correlations(scores_by_attr, args.threshold)
     pairwise_results.sort(key=lambda x: abs(x["corr"]), reverse=True)
 
@@ -265,37 +332,146 @@ def main():
     else:
         print(f"\n  No pairs found with |corr| > {args.threshold}")
 
-    # ── Section 3: Dimension dominance ──
-    # Counts how many high-correlation pairs each attribute participates in.
-    # An attribute appearing in many pairs may be a "dominant" dimension
-    # that leaks into others — a candidate for --debiasing_dim.
-    print(f"\n{'=' * 70}")
-    print("DIMENSION DOMINANCE SUMMARY")
-    print(f"  (count of pairs with |corr| > {args.threshold} per attribute)")
-    print(f"{'=' * 70}")
+    # ── Section 4: Within-domain correlation matrices ──
+    domain_indices = get_domain_indices()
+    print(f"\n{'=' * 100}")
+    print("WITHIN-DOMAIN CORRELATION MATRICES (Spearman)")
+    print(f"{'=' * 100}")
+
+    for domain_name in ["coherence", "commonsense", "empathy", "multicultural"]:
+        indices = domain_indices.get(domain_name, [])
+        if not indices:
+            continue
+        domain_attrs = [ATTRIBUTES[i] for i in indices]
+        corr_matrix, n_samples = compute_domain_correlation_matrix(scores_by_attr, domain_attrs)
+        if corr_matrix is None:
+            continue
+
+        short_names = [a.split("_", 1)[1][:14] for a in domain_attrs]
+
+        print(f"\n  ### {domain_name.upper()} ({n_samples} samples) ###")
+        # Header
+        print(f"  {'':>16}", end="")
+        for s in short_names:
+            print(f"  {s:>14}", end="")
+        print()
+
+        # Matrix rows
+        for i, name in enumerate(short_names):
+            print(f"  {name:>16}", end="")
+            for j in range(len(indices)):
+                val = corr_matrix[i, j]
+                marker = "*" if i != j and abs(val) > 0.8 else " "
+                print(f"  {val:>13.3f}{marker}", end="")
+            print()
+
+        # Average off-diagonal correlation
+        n = len(indices)
+        off_diag = [corr_matrix[i, j] for i in range(n) for j in range(n) if i != j]
+        avg_corr = np.mean(off_diag)
+        max_corr = np.max(off_diag)
+        min_corr = np.min(off_diag)
+        print(f"  Avg off-diagonal corr: {avg_corr:.3f}  (range: [{min_corr:.3f}, {max_corr:.3f}])")
+
+    # ── Section 5: PCA dimensionality analysis ──
+    print(f"\n{'=' * 100}")
+    print("PCA DIMENSIONALITY ANALYSIS (per domain)")
+    print("  How many independent dimensions does each domain effectively have?")
+    print(f"{'=' * 100}")
+
+    for domain_name in ["coherence", "commonsense", "empathy", "multicultural"]:
+        indices = domain_indices.get(domain_name, [])
+        if not indices:
+            continue
+        domain_attrs = [ATTRIBUTES[i] for i in indices]
+        corr_matrix, n_samples = compute_domain_correlation_matrix(scores_by_attr, domain_attrs)
+        if corr_matrix is None:
+            continue
+
+        pca_results = compute_pca_analysis(corr_matrix)
+
+        print(f"\n  ### {domain_name.upper()} ({len(indices)} attributes → ? effective dims) ###")
+        for pc in pca_results:
+            marker = ""
+            if pc["cumulative_pct"] >= 95 and (pc["component"] == 1 or pca_results[pc["component"] - 2]["cumulative_pct"] < 95):
+                marker = "  ← 95% threshold"
+            print(f"    PC{pc['component']}: eigenvalue={pc['eigenvalue']:.3f}  "
+                  f"explains={pc['explained_pct']:.1f}%  cumulative={pc['cumulative_pct']:.1f}%{marker}")
+
+        # Effective dimensionality: count components needed for 95% variance
+        eff_dims = next((pc["component"] for pc in pca_results if pc["cumulative_pct"] >= 95), len(indices))
+        print(f"  → {len(indices)} attributes contain ~{eff_dims} independent dimensions of information")
+
+    # ── Section 6: Dimension dominance ──
+    print(f"\n{'=' * 100}")
+    print(f"DIMENSION DOMINANCE (pairs with |corr| > {args.threshold})")
+    print(f"{'=' * 100}")
     counts = {}
     for r in high_corr:
         counts[r["a"]] = counts.get(r["a"], 0) + 1
         counts[r["b"]] = counts.get(r["b"], 0) + 1
     if counts:
         for attr, count in sorted(counts.items(), key=lambda x: -x[1]):
-            print(f"  {attr:<35} {count:>3} high-corr pairs")
+            idx = ATTRIBUTES.index(attr)
+            print(f"  [{idx:2d}] {attr:<35} {count:>3} high-corr pairs")
     else:
         print("  No dominant dimensions found.")
 
-    # ── Section 4: Length bias warning ──
-    # If any attribute strongly correlates with length, flag it.
-    # This is the most actionable output: these attributes might benefit
-    # from debiasing via --debiasing_dim in stage-2_train.py.
+    # ── Section 7: Length bias warning ──
     length_biased = [r for r in length_results if abs(r["corr"]) > args.threshold]
     if length_biased:
-        print(f"\n{'=' * 70}")
+        print(f"\n{'=' * 100}")
         print("LENGTH BIAS WARNING")
-        print(f"{'=' * 70}")
+        print(f"{'=' * 100}")
         for r in length_biased:
-            print(f"  {r['attr']:<35} corr with length = {r['corr']:>8.4f}")
+            idx = ATTRIBUTES.index(r["attr"])
+            direction = "longer→higher" if r["corr"] > 0 else "shorter→higher"
+            print(f"  [{idx:2d}] {r['attr']:<35} corr={r['corr']:>+.4f}  ({direction})")
         print(f"\n  These attributes correlate strongly with response length.")
-        print(f"  Consider using --debiasing_dim with one of these if needed.")
+        print(f"  Consider using --debiasing_dims with these indices.")
+
+    # ── Section 8: Debiasing recommendations ──
+    print(f"\n{'=' * 100}")
+    print("DEBIASING RECOMMENDATIONS")
+    print(f"{'=' * 100}")
+
+    # Find low-variance attributes
+    low_var = [s for s in attr_stats if s["n"] > 0 and s["std"] < 0.10]
+    if low_var:
+        print(f"\n  A. Low-variance attributes (std < 0.10) — near-constant, contribute noise:")
+        for s in low_var:
+            print(f"     [{s['idx']:2d}] {s['attr']:<35} std={s['std']:.4f}  range=[{s['min']:.2f}, {s['max']:.2f}]")
+
+    # Find highly redundant pairs (corr > 0.85)
+    very_redundant = [r for r in pairwise_results if abs(r["corr"]) > 0.85]
+    if very_redundant:
+        print(f"\n  B. Highly redundant pairs (|corr| > 0.85) — candidates for debiasing one of each pair:")
+        for r in very_redundant:
+            idx_a = ATTRIBUTES.index(r["a"])
+            idx_b = ATTRIBUTES.index(r["b"])
+            print(f"     [{idx_a:2d}] {r['a']:<30} ↔ [{idx_b:2d}] {r['b']:<30} corr={r['corr']:.3f}")
+
+    # Length-biased dims
+    strong_length = [r for r in length_results if abs(r["corr"]) > 0.30]
+    if strong_length:
+        print(f"\n  C. Length-biased attributes (|corr with length| > 0.30):")
+        for r in strong_length:
+            idx = ATTRIBUTES.index(r["attr"])
+            print(f"     [{idx:2d}] {r['attr']:<35} length_corr={r['corr']:>+.4f}")
+
+    # Summary recommendation
+    recommended_dims = set()
+    for s in low_var:
+        recommended_dims.add(s["idx"])
+    for r in length_results:
+        if abs(r["corr"]) > 0.50:
+            recommended_dims.add(ATTRIBUTES.index(r["attr"]))
+    if recommended_dims:
+        sorted_dims = sorted(recommended_dims)
+        dim_str = " ".join(str(d) for d in sorted_dims)
+        attr_str = ", ".join(f"{ATTRIBUTES[d]}" for d in sorted_dims)
+        print(f"\n  → Suggested --debiasing_dims: {dim_str}")
+        print(f"    ({attr_str})")
 
 
 if __name__ == "__main__":
