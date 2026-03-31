@@ -1,12 +1,10 @@
-"""Evaluate base reward models on scoring and preference data.
+"""Evaluate base reward models (as-is from HuggingFace) on test data.
 
-Two evaluation modes:
-  1. Scoring  – per-attribute regression quality (Multi-Domain-Data-Scoring)
-  2. Preference – chosen-vs-rejected accuracy  (Multi-Domain-Data-Preference-Pairs)
-
-When --no_regression is passed, the model's native reward head is used
-instead of regression weights, producing a single scalar score that is
-correlated against each attribute independently.
+Evaluation modes:
+  1. Scoring   – native reward correlated against per-attribute labels
+  2. Preference – chosen-vs-rejected accuracy
+  3. Cultural  – score cultural conversations (per-country / per-arousal)
+  4. Generative – BRRM-style 2-turn judge for preference
 """
 
 import json
@@ -16,46 +14,15 @@ import re
 
 import numpy as np
 import torch
-import torch.nn as nn
 from argparse import ArgumentParser
 from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
-from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from datetime import datetime
 from attributes import ATTRIBUTES, DOMAIN_PREFIXES
 from config_utils import load_yaml_config, apply_section_overrides
-from utils import _resolve_jsonl_path, load_jsonl_test, _requires_remote_code
-
-
-@torch.no_grad()
-def _get_hidden_state(model, tokenizer, messages, device, max_length, pad_token_id):
-    """Extract the last-token hidden state from the base model."""
-    encoding = tokenizer.apply_chat_template(
-        messages, return_tensors="pt", padding=True, truncation=True, max_length=max_length,
-    )
-    if isinstance(encoding, torch.Tensor):
-        input_ids = encoding.to(device)
-        attention_mask = None
-    else:
-        input_ids = encoding["input_ids"].to(device)
-        attention_mask = encoding.get("attention_mask")
-        attention_mask = attention_mask.to(device) if attention_mask is not None else None
-
-    outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-    hidden_states = outputs[0]  # (batch, seq_len, hidden_dim)
-
-    # Get last non-padding token position (same logic as RewardModelWithGating)
-    if pad_token_id is not None and input_ids is not None:
-        sequence_lengths = torch.eq(input_ids, pad_token_id).int().argmax(-1) - 1
-        sequence_lengths = sequence_lengths % input_ids.shape[-1]
-    else:
-        sequence_lengths = torch.tensor([-1], device=device)
-
-    batch_size = input_ids.shape[0]
-    dummy_iterator = torch.arange(batch_size, device=device)
-    last_hidden = hidden_states[dummy_iterator, sequence_lengths]  # (batch, hidden_dim)
-    return last_hidden
+from utils import load_jsonl_test, _requires_remote_code, load_cultural_test, parse_cultural_conversation
 
 
 @torch.no_grad()
@@ -78,12 +45,10 @@ def _get_reward_score(model, tokenizer, messages, device, max_length, pad_token_
     return reward
 
 
-def evaluate_scoring(model, tokenizer, records, device, max_length, pad_token_id,
-                     no_regression, reg_weight):
-    """Evaluate per-attribute scoring on Multi-Domain-Data-Scoring test split."""
-    eval_label = "NATIVE REWARD" if no_regression else "STAGE-1 SCORING"
+def evaluate_scoring(model, tokenizer, records, device, max_length, pad_token_id):
+    """Evaluate native reward correlated against per-attribute labels."""
     print(f"\n{'=' * 70}")
-    print(f"  {eval_label} EVALUATION — {len(records)} test samples")
+    print(f"  BASELINE SCORING EVALUATION — {len(records)} test samples")
     print(f"{'=' * 70}")
 
     attr_pred: dict[str, list[float]] = {a: [] for a in ATTRIBUTES}
@@ -104,17 +69,10 @@ def evaluate_scoring(model, tokenizer, records, device, max_length, pad_token_id
             continue
 
         try:
-            if no_regression:
-                reward = _get_reward_score(model, tokenizer, messages, device, max_length, pad_token_id)
-                for idx, attr in valid_attrs:
-                    attr_pred[attr].append(reward)
-                    attr_true[attr].append(float(scores[attr]))
-            else:
-                hidden = _get_hidden_state(model, tokenizer, messages, device, max_length, pad_token_id)
-                rewards = (hidden @ reg_weight.T).cpu().float().squeeze(0).numpy()
-                for idx, attr in valid_attrs:
-                    attr_pred[attr].append(float(rewards[idx]))
-                    attr_true[attr].append(float(scores[attr]))
+            reward = _get_reward_score(model, tokenizer, messages, device, max_length, pad_token_id)
+            for idx, attr in valid_attrs:
+                attr_pred[attr].append(reward)
+                attr_true[attr].append(float(scores[attr]))
             evaluated += 1
         except Exception as e:
             if skipped < 3:
@@ -506,6 +464,104 @@ def evaluate_preference_generative(model, tokenizer, records, device, max_gen_to
     }
 
 
+def evaluate_cultural_baseline(model, tokenizer, data_dir, device, max_length, pad_token_id):
+    """Score cultural conversations with the base model's native reward and report per-country / per-arousal stats."""
+    records = load_cultural_test(data_dir)
+    if not records:
+        print(f"No cultural test records found in {data_dir}")
+        return {}
+
+    print(f"\n{'=' * 70}")
+    print(f"  BASELINE CULTURAL EVALUATION — {len(records)} conversations")
+    print(f"{'=' * 70}")
+
+    country_scores: dict[str, list[float]] = {}
+    arousal_scores: dict[int, list[float]] = {}
+    all_scores: list[float] = []
+    all_arousal: list[int] = []
+    skipped = 0
+
+    for record in tqdm(records, desc="Cultural"):
+        messages = parse_cultural_conversation(record)
+        if len(messages) < 2:
+            skipped += 1
+            continue
+
+        try:
+            score = _get_reward_score(model, tokenizer, messages, device, max_length, pad_token_id)
+        except Exception:
+            skipped += 1
+            continue
+
+        country = record.get("country_1", "unknown")
+        arousal = record.get("arousal_score")
+        if isinstance(arousal, str):
+            arousal = int(arousal) if arousal.isdigit() else None
+
+        all_scores.append(score)
+        country_scores.setdefault(country, []).append(score)
+
+        if arousal is not None:
+            arousal_scores.setdefault(arousal, []).append(score)
+            all_arousal.append(arousal)
+
+    if skipped:
+        print(f"  Skipped: {skipped}")
+    print(f"  Evaluated: {len(all_scores)}")
+
+    if not all_scores:
+        return {}
+
+    scores_arr = np.array(all_scores)
+    print(f"\n  Global score — mean: {scores_arr.mean():.4f}  std: {scores_arr.std():.4f}"
+          f"  min: {scores_arr.min():.4f}  max: {scores_arr.max():.4f}")
+
+    # Per-country table
+    results_country = {}
+    print(f"\n  {'Country':<12} {'N':>4} {'Score':>8} {'Std':>8}")
+    print(f"  {'-' * 36}")
+
+    for c in sorted(country_scores):
+        cs = np.array(country_scores[c])
+        row = {"n": len(cs), "score_mean": round(float(cs.mean()), 4), "score_std": round(float(cs.std()), 4)}
+        print(f"  {c:<12} {len(cs):>4} {cs.mean():>8.4f} {cs.std():>8.4f}")
+        results_country[c] = row
+
+    # Per-arousal level
+    results_arousal = {}
+    if arousal_scores:
+        print(f"\n  {'Arousal':>8} {'N':>5} {'Score Mean':>12} {'Score Std':>11}")
+        print(f"  {'-' * 40}")
+        for level in sorted(arousal_scores):
+            vals = np.array(arousal_scores[level])
+            results_arousal[level] = {"n": len(vals), "mean": round(float(vals.mean()), 4), "std": round(float(vals.std()), 4)}
+            print(f"  {level:>8} {len(vals):>5} {vals.mean():>12.4f} {vals.std():>11.4f}")
+
+    # Correlation score vs arousal
+    corr_info = {}
+    if len(all_arousal) >= 3:
+        a_arr = np.array(all_arousal, dtype=float)
+        s_arr = np.array(all_scores[:len(all_arousal)])
+        r_p = pearsonr(a_arr, s_arr).statistic
+        r_s = spearmanr(a_arr, s_arr).statistic
+        corr_info = {"pearson": round(float(r_p), 4), "spearman": round(float(r_s), 4)}
+        print(f"\n  Score vs Arousal — Pearson: {r_p:.4f}  Spearman: {r_s:.4f}")
+
+    return {
+        "evaluated": len(all_scores),
+        "skipped": skipped,
+        "global_score": {
+            "mean": round(float(scores_arr.mean()), 4),
+            "std": round(float(scores_arr.std()), 4),
+            "min": round(float(scores_arr.min()), 4),
+            "max": round(float(scores_arr.max()), 4),
+        },
+        "countries": results_country,
+        "arousal": results_arousal,
+        "score_vs_arousal": corr_info,
+    }
+
+
 def _save_results(results, args):
     """Save results JSON to model_parent_dir/<model_name>/results/eval_baseline.json."""
     if not args.model_name:
@@ -535,15 +591,13 @@ def main() -> None:
     parser = ArgumentParser(description="Evaluate base reward model on scoring and preference data.")
     parser.add_argument("--config_path", type=str, default="config.yaml", help="Path to YAML config file.")
     parser.add_argument("--model_path", type=str, default=None, help="Base model HF ID or local path.")
-    parser.add_argument("--regression_weights_path", type=str, default=None, help="Path to stage-1 regression weights .pt file.")
     parser.add_argument("--scoring_data_path", type=str, default="data/Multi-Domain-Data-Scoring", help="Path to scoring dataset JSONL.")
     parser.add_argument("--preference_data_path", type=str, default="data/Multi-Domain-Data-Preference-Pairs", help="Path to preference pairs dataset JSONL.")
-    parser.add_argument("--dataset_name", type=str, default="Multi-Domain-Data-Scoring", help="Dataset name (for default weights path resolution).")
     parser.add_argument("--max_length", type=int, default=4096)
     parser.add_argument("--max_samples", type=int, default=None)
-    parser.add_argument("--no_regression", action="store_true", help="Use native reward score (no regression weights).")
     parser.add_argument("--skip_scoring", action="store_true", help="Skip scoring evaluation.")
     parser.add_argument("--skip_preference", action="store_true", help="Skip preference evaluation.")
+    parser.add_argument("--eval", type=str, default=None, help="Path to cultural test JSON directory (e.g. data/test). Enables cultural evaluation.")
     parser.add_argument("--generative_judge", action="store_true", help="Use generative judge (e.g. BRRM) for preference evaluation. Loads model as CausalLM.")
     parser.add_argument("--max_gen_tokens", type=int, default=8192, help="Max new tokens per generation turn (generative judge mode).")
     parser.add_argument("--model_name", type=str, default=None, help="Packaged model dir name (e.g. multi-domain-rm-llama-3-8b-it). Results saved to model/<model_name>/results/eval_baseline.json.")
@@ -557,23 +611,13 @@ def main() -> None:
     if not args.model_path:
         parser.error("--model_path is required (via CLI or config.yaml evaluate_baseline.model_path)")
 
-    no_regression = args.no_regression
     generative = args.generative_judge
-
-    # Resolve regression weights path (not needed when --no_regression or --generative)
-    model_name = args.model_path.split("/")[-1]
-    if not no_regression and not generative and not args.regression_weights_path:
-        args.regression_weights_path = os.path.join(
-            "model", "regression_weights", f"{model_name}_{args.dataset_name}.pt"
-        )
 
     print(f"Base model:          {args.model_path}")
     if generative:
         print(f"Mode:                generative judge (preference only)")
-    elif no_regression:
-        print(f"Mode:                native reward score (no regression weights)")
     else:
-        print(f"Regression weights:  {args.regression_weights_path}")
+        print(f"Mode:                native reward score")
     print(f"Scoring data:        {args.scoring_data_path}")
     print(f"Preference data:     {args.preference_data_path}")
 
@@ -609,43 +653,18 @@ def main() -> None:
         return
 
     # --- Scalar RM mode ---
-    # Load regression weights (skip when --no_regression)
-    reg_weight = None
-    if not no_regression:
-        print("\nLoading stage-1 regression weights...")
-        payload = torch.load(args.regression_weights_path, map_location="cpu", weights_only=True)
-        if isinstance(payload, dict) and "weight" in payload:
-            reg_weight = payload["weight"].float()
-        elif isinstance(payload, torch.Tensor):
-            reg_weight = payload.float()
-        else:
-            raise ValueError("Unexpected regression weights format")
-        print(f"  Regression weight shape: {reg_weight.shape}")
-
     print(f"\nLoading base model on {device} ({dtype})...")
-    if no_regression:
-        model = AutoModelForSequenceClassification.from_pretrained(
-            args.model_path,
-            device_map={"": 0} if use_cuda else None,
-            dtype=dtype,
-            trust_remote_code=trust_remote,
-        )
-    else:
-        model = AutoModel.from_pretrained(
-            args.model_path,
-            device_map={"": 0} if use_cuda else None,
-            dtype=dtype,
-            trust_remote_code=trust_remote,
-        )
+    model = AutoModelForSequenceClassification.from_pretrained(
+        args.model_path,
+        device_map={"": 0} if use_cuda else None,
+        dtype=dtype,
+        trust_remote_code=trust_remote,
+    )
     tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=trust_remote)
     model.eval()
     pad_token_id = tokenizer.pad_token_id
 
-    if reg_weight is not None:
-        reg_weight = reg_weight.to(device=device, dtype=dtype)
-
-    baseline_type = "baseline_no_regression" if no_regression else "baseline_regression"
-    results = {"model": args.model_path, "type": baseline_type}
+    results = {"model": args.model_path, "type": "baseline"}
 
     # Scoring evaluation
     if not args.skip_scoring:
@@ -657,11 +676,9 @@ def main() -> None:
                 random.seed(42)
                 random.shuffle(scoring_records)
                 scoring_records = scoring_records[:args.max_samples]
-            results["scoring"] = evaluate_scoring(model, tokenizer, scoring_records, device, args.max_length,
-                                                  pad_token_id, no_regression, reg_weight)
+            results["scoring"] = evaluate_scoring(model, tokenizer, scoring_records, device, args.max_length, pad_token_id)
 
-    # Preference evaluation (only with --no_regression, needs scalar reward)
-    if not args.skip_preference and no_regression:
+    if not args.skip_preference:
         pref_records = load_jsonl_test(args.preference_data_path)
         if not pref_records:
             print("No preference test records found.")
@@ -671,8 +688,11 @@ def main() -> None:
                 random.shuffle(pref_records)
                 pref_records = pref_records[:args.max_samples]
             results["preference"] = evaluate_preference(model, tokenizer, pref_records, device, args.max_length, pad_token_id)
-    elif not args.skip_preference and not no_regression:
-        print("\n  (Preference evaluation skipped — requires --no_regression or --generative)")
+
+    if args.eval:
+        results["cultural"] = evaluate_cultural_baseline(
+            model, tokenizer, args.eval, device, args.max_length, pad_token_id,
+        )
 
     _save_results(results, args)
 
