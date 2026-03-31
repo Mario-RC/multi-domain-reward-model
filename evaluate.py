@@ -20,7 +20,7 @@ from datetime import datetime
 from modeling_custom import RewardModelWithGating
 from config_utils import load_yaml_config
 from attributes import ATTRIBUTES, DOMAIN_PREFIXES
-from utils import _resolve_inference_model_path, _resolve_jsonl_path, load_jsonl_test, _score_messages
+from utils import _resolve_inference_model_path, load_jsonl_test, _score_messages, load_cultural_test, parse_cultural_conversation
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +260,131 @@ def evaluate_preference(model, tokenizer, data_path, device, max_length, max_sam
 
 
 # ---------------------------------------------------------------------------
+# Cultural evaluation  (data/test/*.json)
+# ---------------------------------------------------------------------------
+
+MU_ATTRIBUTES = [a for a in ATTRIBUTES if a.startswith("mu_")]
+MU_INDICES = [ATTRIBUTES.index(a) for a in MU_ATTRIBUTES]
+
+
+def evaluate_cultural(model, tokenizer, data_dir, device, max_length):
+    """Score cultural conversations and report per-country / per-arousal statistics."""
+    records = load_cultural_test(data_dir)
+    if not records:
+        print(f"No cultural test records found in {data_dir}")
+        return {}
+
+    print(f"\n{'=' * 70}")
+    print(f"  CULTURAL EVALUATION — {len(records)} conversations")
+    print(f"{'=' * 70}")
+
+    country_scores: dict[str, list[float]] = {}
+    country_mu: dict[str, dict[str, list[float]]] = {}
+    arousal_scores: dict[int, list[float]] = {}
+    all_scores: list[float] = []
+    all_arousal: list[int] = []
+    skipped = 0
+
+    for record in tqdm(records, desc="Cultural"):
+        messages = parse_cultural_conversation(record)
+        if len(messages) < 2:
+            skipped += 1
+            continue
+
+        try:
+            out = _score_messages(model, tokenizer, messages, device, max_length)
+            score = out.score.cpu().float().item()
+            rewards = out.rewards.cpu().float().squeeze(0).numpy()
+        except Exception:
+            skipped += 1
+            continue
+
+        country = record.get("country_1", "unknown")
+        arousal = record.get("arousal_score")
+        if isinstance(arousal, str):
+            arousal = int(arousal) if arousal.isdigit() else None
+
+        all_scores.append(score)
+        country_scores.setdefault(country, []).append(score)
+
+        if country not in country_mu:
+            country_mu[country] = {a: [] for a in MU_ATTRIBUTES}
+        for a, idx in zip(MU_ATTRIBUTES, MU_INDICES):
+            country_mu[country][a].append(float(rewards[idx]))
+
+        if arousal is not None:
+            arousal_scores.setdefault(arousal, []).append(score)
+            all_arousal.append(arousal)
+
+    if skipped:
+        print(f"  Skipped: {skipped}")
+    print(f"  Evaluated: {len(all_scores)}")
+
+    if not all_scores:
+        return {}
+
+    scores_arr = np.array(all_scores)
+    print(f"\n  Global score — mean: {scores_arr.mean():.4f}  std: {scores_arr.std():.4f}"
+          f"  min: {scores_arr.min():.4f}  max: {scores_arr.max():.4f}")
+
+    # Per-country table
+    results_country = {}
+    print(f"\n  {'Country':<12} {'N':>4} {'Score':>8} {'Std':>8}", end="")
+    for a in MU_ATTRIBUTES:
+        print(f" {a.replace('mu_',''):>12}", end="")
+    print()
+    print(f"  {'-' * (36 + 13 * len(MU_ATTRIBUTES))}")
+
+    for c in sorted(country_scores):
+        cs = np.array(country_scores[c])
+        row = {"n": len(cs), "score_mean": round(float(cs.mean()), 4), "score_std": round(float(cs.std()), 4)}
+        print(f"  {c:<12} {len(cs):>4} {cs.mean():>8.4f} {cs.std():>8.4f}", end="")
+        mu_means = {}
+        for a in MU_ATTRIBUTES:
+            vals = np.array(country_mu[c][a])
+            m = float(vals.mean())
+            mu_means[a] = round(m, 4)
+            print(f" {m:>12.4f}", end="")
+        row["mu_attributes"] = mu_means
+        results_country[c] = row
+        print()
+
+    # Per-arousal level
+    results_arousal = {}
+    if arousal_scores:
+        print(f"\n  {'Arousal':>8} {'N':>5} {'Score Mean':>12} {'Score Std':>11}")
+        print(f"  {'-' * 40}")
+        for level in sorted(arousal_scores):
+            vals = np.array(arousal_scores[level])
+            results_arousal[level] = {"n": len(vals), "mean": round(float(vals.mean()), 4), "std": round(float(vals.std()), 4)}
+            print(f"  {level:>8} {len(vals):>5} {vals.mean():>12.4f} {vals.std():>11.4f}")
+
+    # Correlation score vs arousal
+    corr_info = {}
+    if len(all_arousal) >= 3:
+        a_arr = np.array(all_arousal, dtype=float)
+        s_arr = np.array(all_scores[:len(all_arousal)])
+        r_p = pearsonr(a_arr, s_arr).statistic
+        r_s = spearmanr(a_arr, s_arr).statistic
+        corr_info = {"pearson": round(float(r_p), 4), "spearman": round(float(r_s), 4)}
+        print(f"\n  Score vs Arousal — Pearson: {r_p:.4f}  Spearman: {r_s:.4f}")
+
+    return {
+        "evaluated": len(all_scores),
+        "skipped": skipped,
+        "global_score": {
+            "mean": round(float(scores_arr.mean()), 4),
+            "std": round(float(scores_arr.std()), 4),
+            "min": round(float(scores_arr.min()), 4),
+            "max": round(float(scores_arr.max()), 4),
+        },
+        "countries": results_country,
+        "arousal": results_arousal,
+        "score_vs_arousal": corr_info,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -282,6 +407,7 @@ def main() -> None:
     parser.add_argument("--max_samples", type=int, default=None, help="Cap per evaluation (for quick debugging).")
     parser.add_argument("--skip_scoring", action="store_true", help="Skip scoring evaluation.")
     parser.add_argument("--skip_preference", action="store_true", help="Skip preference evaluation.")
+    parser.add_argument("--eval", type=str, default=None, help="Path to cultural test JSON directory (e.g. data/test). Enables cultural evaluation.")
     parser.add_argument("--output_json", type=str, default=None, help="Save evaluation results to a JSON file.")
     parser.add_argument("--compare_model_name", type=str, default=None, help="Name of a second packaged model to evaluate and compare against the main model.")
     parser.add_argument("--compare_model_path", type=str, default=None, help="Path override for the second model (alternative to --compare_model_name).")
@@ -321,6 +447,9 @@ def main() -> None:
     if not args.skip_preference:
         results["preference"] = evaluate_preference(model, tokenizer, args.preference_data_path, device, args.max_length, args.max_samples)
 
+    if args.eval:
+        results["cultural"] = evaluate_cultural(model, tokenizer, args.eval, device, args.max_length)
+
     # --- Optional comparison model ---
     compare_path = args.compare_model_path or (
         _resolve_inference_model_path(config, None, args.model_parent_dir, args.compare_model_name)
@@ -345,6 +474,8 @@ def main() -> None:
             results_cmp["scoring"] = evaluate_scoring(model_cmp, tokenizer_cmp, args.scoring_data_path, device_cmp, args.max_length, args.max_samples)
         if not args.skip_preference:
             results_cmp["preference"] = evaluate_preference(model_cmp, tokenizer_cmp, args.preference_data_path, device_cmp, args.max_length, args.max_samples)
+        if args.eval:
+            results_cmp["cultural"] = evaluate_cultural(model_cmp, tokenizer_cmp, args.eval, device_cmp, args.max_length)
 
         del model_cmp
 
