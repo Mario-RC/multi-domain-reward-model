@@ -28,7 +28,7 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
   --dataset_split train \
   --n_shards 1 --shard_idx 1 --device 0
 
-## stage 2 prepare for reference data ###
+### stage 2 prepare for reference data ###
 CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
   --model_family llama3 \
@@ -37,7 +37,7 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
   --dataset_split train \
   --n_shards 1 --shard_idx 1 --device 0
 
-## stage 2 prepare for reward-bench eval data ###
+### stage 2 prepare for reward-bench eval data ###
 CUDA_VISIBLE_DEVICES=0 python3 stage-2_prepare.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
   --model_family llama3 \
@@ -58,6 +58,14 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
   --temperature 10.0 \
   --n_steps 2000 \
   --seed 0 \
+  --learning_rate 0.001 \
+  --weight_decay 0.0 \
+  --n_hidden 3 \
+  --hidden_size 1024 \
+  --dropout 0.2 \
+  --batch_size 1024 \
+  --corr_threshold 0.03 \
+  --logit_scale 1.0 \
   --dataset_split train \
   --eval reward-bench \
   --device 0
@@ -73,12 +81,21 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-3_package_model.py \
   --temperature 10.0 \
   --n_steps 2000 \
   --seed 0 \
+  --learning_rate 0.001 \
+  --weight_decay 0.0 \
+  --n_hidden 3 \
+  --hidden_size 1024 \
+  --dropout 0.2 \
+  --batch_size 1024 \
+  --corr_threshold 0.03 \
+  --logit_scale 1.0 \
   --output_model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################
 ### evaluate ###
 CUDA_VISIBLE_DEVICES=0 python3 evaluate.py \
-  --model_name multi-domain-rm-llama-3-8b-it
+  --model_name multi-domain-rm-llama-3-8b-it \
+  --eval data/test
 
 ##########################################
 ### predict ###
@@ -92,9 +109,10 @@ CUDA_VISIBLE_DEVICES=0 python3 analyze_correlations.py \
   --threshold 0.5
 
 ##########################################
-### evaluate baseline (no regression) ###
+### evaluate baseline ###
 CUDA_VISIBLE_DEVICES=0 python3 evaluate_baseline.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
+  --eval data/test \
   --model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################
