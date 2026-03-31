@@ -95,7 +95,6 @@ CUDA_VISIBLE_DEVICES=0 python3 analyze_correlations.py \
 ### evaluate baseline (no regression) ###
 CUDA_VISIBLE_DEVICES=0 python3 evaluate_baseline.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
-  --no_regression \
   --model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################

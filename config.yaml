@@ -136,10 +136,9 @@ compare_models:
 # --- Baseline evaluation ---
 #
 #  Modes:
-#   - no_regression + skip_scoring: native reward score, preference only (LLaMA3, Gemma2)
-#   - no_regression:                native reward score, scoring + preference
+#   - (default):                    native reward score, scoring + preference
 #   - generative_judge + skip_scoring: generative judge, preference only (BRRM)
-#   - (default):                    stage-1 regression weights, scoring only
+#   - --eval data/test:             add cultural evaluation
 
 evaluate_baseline:
   model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1
@@ -147,10 +146,8 @@ evaluate_baseline:
   model_parent_dir: model
   scoring_data_path: data/Multi-Domain-Data-Scoring
   preference_data_path: data/Multi-Domain-Data-Preference-Pairs
-  dataset_name: Multi-Domain-Data-Scoring
   max_length: 4096
   max_samples: null
-  no_regression: true
   skip_scoring: false
   skip_preference: false
   generative_judge: false

@@ -183,8 +183,8 @@ python3 stage-2_train.py \
   --eval_every 200 \                                              # Validation frequency (steps)
   --patience 5 \                                                  # Early stopping patience (based on val_loss)
   --curriculum \                                                  # Enable phased curriculum learning (easy → easy+medium → all)
-  --curriculum_phase1_frac 0.30 \                                 # Fraction of n_steps for easy-only phase
-  --curriculum_phase2_frac 0.60                                   # Fraction of n_steps to end easy+medium phase
+  --curriculum_phase1_frac 0.20 \                                 # Fraction of n_steps for easy-only phase
+  --curriculum_phase2_frac 0.50                                   # Fraction of n_steps to end easy+medium phase
 ```
 
 > **Reference dataset and `debiasing_dims`:** The reference dataset is only used when `debiasing_dims` contains indices >= 0. If `debiasing_dims` is `-1` (disabled), the reference dataset will **not** be loaded or used, even if provided.
@@ -222,8 +222,9 @@ python3 stage-3_package_model.py \
 ### Evaluate the packaged model
 ```bash
 python3 evaluate.py \
-  --model_name multi-domain-rm-llama-3-8b-it-100pct \              # Name of the packaged model to evaluate
-  --compare_model_name multi-domain-rm-llama-3-8b-it-80pct         # Optional: second model to evaluate and compare
+  --model_name multi-domain-rm-llama-3-8b-it \              # Name of the packaged model to evaluate
+  --eval data/test \                                        # Optional: cultural test data directory
+  --compare_model_name multi-domain-rm-llama-3-8b-it-80pct  # Optional: second model to evaluate and compare
 ```
 Results are auto-saved to `model/<model_name>/results/eval.json` for each model.
 
@@ -252,16 +253,16 @@ Output sections:
 - **Dimension dominance summary** — Which attributes appear in the most high-correlation pairs.
 - **Debiasing recommendations** — Actionable suggestions: low-variance dims, redundant pairs, length-biased dims. Outputs the attribute indices to use with `--debiasing_dims` in `stage-2_train.py`.
 
-### Evaluate baseline (no regression)
+### Evaluate baseline
 
-Evaluate a base reward model using its native reward score (no stage-1 regression weights). Use `--model_name` to save results as `eval_baseline.json` inside the corresponding packaged model's results directory.
+Evaluate a base reward model (as-is from HuggingFace) using its native reward score. Use `--model_name` to save results as `eval_baseline.json` inside the corresponding packaged model's results directory.
 
 ```bash
-# Scalar RM — scoring + preference (LLaMA3, Gemma2)
+# Scalar RM — scoring + preference + cultural (LLaMA3, Gemma2)
 python3 evaluate_baseline.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \  # Base reward model path
-  --no_regression \                              # Use raw reward score (skip stage-1 regression weights)
-  --model_name multi-domain-rm-llama-3-8b-it     # Save results under this model's directory
+  --eval data/test \                              # Optional: cultural test data directory
+  --model_name multi-domain-rm-llama-3-8b-it      # Save results under this model's directory
 
 # Generative judge — preference only (BRRM)
 python3 evaluate_baseline.py \
