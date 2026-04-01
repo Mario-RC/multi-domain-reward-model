@@ -83,6 +83,10 @@ stage_2_train:
   dropout: 0.2
   max_samples: null
   seed: 0
+  eval_split: filtered
+  eval_every: 200
+  patience: 5
+  stage_1_weights_path: null
   curriculum: false
   curriculum_phase1_frac: 0.30
   curriculum_phase2_frac: 0.60
@@ -108,6 +112,8 @@ stage_3_package:
   batch_size: 1024
   corr_threshold: 0.03
   logit_scale: 1.0
+  stage_1_weights_path: null
+  curriculum: false
   output_model_name: multi-domain-rm-llama-3-8b-it
 
 
@@ -129,8 +135,6 @@ analyze_correlations:
 
 compare_models:
   model_parent_dir: model
-  max_samples: null
-  max_length: 4096
 
 
 # --- Baseline evaluation ---
@@ -146,6 +150,7 @@ evaluate_baseline:
   model_parent_dir: model
   scoring_data_path: data/Multi-Domain-Data-Scoring
   preference_data_path: data/Multi-Domain-Data-Preference-Pairs
+  eval: null  # Path to cultural test data directory (e.g. data/test)
   max_length: 4096
   max_samples: null
   skip_scoring: false
