@@ -118,6 +118,12 @@ python3 stage-1_train.py \
   --dataset_split train                                       # Split to train on
 ```
 
+> **80pct vs 100pct weights:** Stage 1 splits the training data 80/20. It sweeps Ridge regression alphas on the 80% split, picks the best alpha by validation MSE on the 20% split, and then **retrains on 100% of the data** with that best alpha. Two weight files are saved:
+> - `_100pct.pt` — final weights retrained on all data with the best alpha (used by default in Stage 2 and Stage 3).
+> - `_80pct.pt` — weights from the validation-best model (80% training split only, useful as a sanity check).
+>
+> Subsequent stages auto-resolve to `_100pct.pt` unless `--stage_1_weights_path` is explicitly passed.
+
 ### Stage 2 prepare (preference data)
 ```bash
 python3 stage-2_prepare.py \
@@ -187,6 +193,8 @@ python3 stage-2_train.py \
   --curriculum_phase2_frac 0.50                                   # Fraction of n_steps to end easy+medium phase
 ```
 
+> **`--stage_1_weights_path` (optional):** Override which Stage 1 regression weights to load. If omitted, auto-resolves to `model/regression_weights/{model_name}_{multi_objective_dataset_name}_100pct.pt`. If a bare filename is given (no `/`), the `_100pct` suffix is appended automatically unless the name already ends with `_100pct.pt` or `_80pct.pt`.
+>
 > **Reference dataset and `debiasing_dims`:** The reference dataset is only used when `debiasing_dims` contains indices >= 0. If `debiasing_dims` is `-1` (disabled), the reference dataset will **not** be loaded or used, even if provided.
 >
 > `debiasing_dims` accepts one or more attribute dimension indices whose influence you want to decorrelate from the rest. For each target dimension and each other dimension *d*, it finds the smallest penalty *p* such that `adjusted_d = d - p * target_dim` has a Spearman correlation with the target dimension below `corr_threshold`. The result is a `reward_transform_matrix` that subtracts the leaking influence of the chosen dimensions before the gating network combines scores.
@@ -218,15 +226,18 @@ python3 stage-3_package_model.py \
   --output_model_name multi-domain-rm-llama-3-8b-it               # Name for the packaged HuggingFace model
 ```
 > All hyperparameters (`--temperature`, `--n_steps`, `--seed`, `--learning_rate`, `--weight_decay`, `--n_hidden`, `--hidden_size`, `--dropout`, `--batch_size`, `--corr_threshold`, `--logit_scale`) must match the values used during Stage 2 training so the correct checkpoint file is found. Pass `null` for reference_dataset_name if Stage 2 was trained without a reference dataset.
+>
+> **`--stage_1_weights_path` (optional):** Same auto-resolution logic as Stage 2 — defaults to `_100pct.pt` if omitted.
 
 ### Evaluate the packaged model
 ```bash
 python3 evaluate.py \
-  --model_name multi-domain-rm-llama-3-8b-it \              # Name of the packaged model to evaluate
-  --eval data/test \                                        # Optional: cultural test data directory
-  --compare_model_name multi-domain-rm-llama-3-8b-it-80pct  # Optional: second model to evaluate and compare
+  --model_name multi-domain-rm-llama-3-8b-it \  # Name of the packaged model to evaluate
+  --eval data/test                              # Optional: cultural test data directory
 ```
 Results are auto-saved to `model/<model_name>/results/eval.json` for each model.
+
+> **Dual scoring evaluation (80pct / 100pct):** If the `_80pct.pt` weights file exists alongside the `_100pct.pt` used during packaging, `evaluate.py` evaluates scoring with **both** weight sets. Results are saved as `scoring_80pct` and `scoring_100pct` in the output JSON. The 80pct result reflects performance of the validation-best model; the 100pct result reflects the final model retrained on all data. Preference and cultural evaluations always use the 100pct weights (packaged in the model).
 
 ### Run quick prediction comparison
 ```bash
