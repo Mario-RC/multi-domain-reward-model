@@ -1,5 +1,6 @@
 # stage-3_package_model.py
 
+import json
 import os
 import sys
 import torch
@@ -131,10 +132,17 @@ def main() -> None:
         args.model_path = stage3_cfg.get("model_path")
 
     inferred_stage1, inferred_stage2, inferred_output = _build_defaults_from_config(config, args.model_path, args)
-    if args.stage_1_weights_path and os.path.sep not in args.stage_1_weights_path:
-        stage_1_weights_path = os.path.join("model", "regression_weights", args.stage_1_weights_path)
+    if args.stage_1_weights_path:
+        fname = args.stage_1_weights_path
+        if os.path.sep not in fname:
+            # Auto-append _100pct suffix when bare filename lacks it.
+            if fname.endswith(".pt") and not (fname.endswith("_100pct.pt") or fname.endswith("_80pct.pt")):
+                fname = fname[:-3] + "_100pct.pt"
+            stage_1_weights_path = os.path.join("model", "regression_weights", fname)
+        else:
+            stage_1_weights_path = fname
     else:
-        stage_1_weights_path = args.stage_1_weights_path or inferred_stage1
+        stage_1_weights_path = inferred_stage1
     stage_2_weights_path = args.stage_2_weights_path or inferred_stage2
     inferred_parent = os.path.dirname(inferred_output)
     inferred_name = os.path.basename(inferred_output)
@@ -207,6 +215,18 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
     model.save_pretrained(output_dir)
     tokenizer.save_pretrained(output_dir)
+
+    # Save training metadata so evaluate.py can discover stage-1/stage-2 paths.
+    metadata = {
+        "base_model_path": args.model_path,
+        "stage_1_weights_path": stage_1_weights_path,
+        "stage_2_weights_path": stage_2_weights_path,
+    }
+    metadata_path = os.path.join(output_dir, "training_metadata.json")
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+    print(f"Training metadata saved to: {metadata_path}")
+
     print(f"Multidomain reward model packaged at: {output_dir}")
 
 

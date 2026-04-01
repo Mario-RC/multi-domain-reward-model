@@ -311,10 +311,14 @@ def main():
     )
     # Regression weights file path.
     if args.stage_1_weights_path:
-        if os.path.sep not in args.stage_1_weights_path:
-            regression_layer_path = os.path.join(BASE_DATA_DIR, "regression_weights", args.stage_1_weights_path)
+        fname = args.stage_1_weights_path
+        if os.path.sep not in fname:
+            # Auto-append _100pct suffix when bare filename lacks it.
+            if fname.endswith(".pt") and not (fname.endswith("_100pct.pt") or fname.endswith("_80pct.pt")):
+                fname = fname[:-3] + "_100pct.pt"
+            regression_layer_path = os.path.join(BASE_DATA_DIR, "regression_weights", fname)
         else:
-            regression_layer_path = args.stage_1_weights_path
+            regression_layer_path = fname
     else:
         regression_layer_path = os.path.join(
             BASE_DATA_DIR, "regression_weights", f"{args.model_name}_{args.multi_objective_dataset_name}_100pct.pt"
