@@ -68,7 +68,12 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-2_train.py \
   --logit_scale 1.0 \
   --dataset_split train \
   --eval reward-bench \
-  --device 0
+  --device 0 \
+  --eval_every 200 \
+  --patience 5 \
+  --curriculum \
+  --curriculum_phase1_frac 0.20 \
+  --curriculum_phase2_frac 0.50
 
 ##########################################
 ### stage 3 packaging model ###
@@ -89,6 +94,7 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-3_package_model.py \
   --batch_size 1024 \
   --corr_threshold 0.03 \
   --logit_scale 1.0 \
+  --curriculum \
   --output_model_name multi-domain-rm-llama-3-8b-it
 
 ##########################################
