@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 
 from datetime import datetime
 from modeling_custom import RewardModelWithGating
-from config_utils import load_yaml_config
+from config_utils import load_yaml_config, apply_section_overrides
 from attributes import ATTRIBUTES, DOMAIN_PREFIXES
 from utils import _resolve_inference_model_path, load_jsonl_test, _score_messages, load_cultural_test, parse_cultural_conversation
 
@@ -286,7 +286,9 @@ def evaluate_cultural(model, tokenizer, data_dir, device, max_length):
     skipped = 0
 
     for record in tqdm(records, desc="Cultural"):
-        messages = parse_cultural_conversation(record)
+        messages = record.get("messages")
+        if not messages or not isinstance(messages, list):
+            messages = parse_cultural_conversation(record)
         if len(messages) < 2:
             skipped += 1
             continue
@@ -299,8 +301,9 @@ def evaluate_cultural(model, tokenizer, data_dir, device, max_length):
             skipped += 1
             continue
 
-        country = record.get("country_1", "unknown")
-        arousal = record.get("arousal_score")
+        dm = record.get("domain_metadata") or {}
+        country = dm.get("country_1", record.get("country_1", "unknown"))
+        arousal = dm.get("arousal_score", record.get("arousal_score"))
         if isinstance(arousal, str):
             arousal = int(arousal) if arousal.isdigit() else None
 
@@ -412,6 +415,10 @@ def main() -> None:
 
     args = parser.parse_args()
     config = load_yaml_config(args.config_path)
+    args = apply_section_overrides(
+        args, config.get("inference", {}),
+        skip_keys={"model_path", "model_parent_dir", "model_name"},
+    )
 
     # Resolve data paths from config fallbacks
     if not args.scoring_data_path:
