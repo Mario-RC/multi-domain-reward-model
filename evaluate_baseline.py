@@ -482,7 +482,9 @@ def evaluate_cultural_baseline(model, tokenizer, data_dir, device, max_length, p
     skipped = 0
 
     for record in tqdm(records, desc="Cultural"):
-        messages = parse_cultural_conversation(record)
+        messages = record.get("messages")
+        if not messages or not isinstance(messages, list):
+            messages = parse_cultural_conversation(record)
         if len(messages) < 2:
             skipped += 1
             continue
@@ -493,8 +495,9 @@ def evaluate_cultural_baseline(model, tokenizer, data_dir, device, max_length, p
             skipped += 1
             continue
 
-        country = record.get("country_1", "unknown")
-        arousal = record.get("arousal_score")
+        dm = record.get("domain_metadata") or {}
+        country = dm.get("country_1", record.get("country_1", "unknown"))
+        arousal = dm.get("arousal_score", record.get("arousal_score"))
         if isinstance(arousal, str):
             arousal = int(arousal) if arousal.isdigit() else None
 
