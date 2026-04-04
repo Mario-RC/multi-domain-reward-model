@@ -59,16 +59,25 @@ def _resolve_jsonl_path(path: str) -> str:
 
 
 def load_cultural_test(data_dir: str) -> list[dict]:
-    """Load all JSON cultural test files from *data_dir* and return a flat list of records."""
+    """Load all JSON/JSONL cultural test files from *data_dir* and return a flat list of records."""
     records: list[dict] = []
     if not os.path.isdir(data_dir):
         return records
     for fname in sorted(os.listdir(data_dir)):
-        if not fname.endswith(".json"):
-            continue
-        with open(os.path.join(data_dir, fname), "r", encoding="utf-8") as f:
-            rows = json.load(f)
-        records.extend(rows)
+        fpath = os.path.join(data_dir, fname)
+        if fname.endswith(".jsonl"):
+            with open(fpath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        records.append(json.loads(line))
+        elif fname.endswith(".json"):
+            with open(fpath, "r", encoding="utf-8") as f:
+                rows = json.load(f)
+            if isinstance(rows, list):
+                records.extend(rows)
+            else:
+                records.append(rows)
     return records
 
 
@@ -79,7 +88,7 @@ def parse_cultural_conversation(record: dict) -> list[dict]:
     consecutive turns from the same speaker.
     """
     conv = record.get("conversation", "")
-    lines = conv.split("\\n")
+    lines = conv.split("\n")
     messages: list[dict] = []
     speakers: dict[str, str] = {}
 
