@@ -95,7 +95,7 @@ parser.add_argument("--model_key", type=str, default=None, help="Model key defin
 parser.add_argument("--model_path", type=str, default=None, help="Path to the pre-trained model (HuggingFace path or local folder).")
 parser.add_argument("--model_family", type=str, default="llama3", help="Model family (llama3, gemma2, qwen3, auto)")
 parser.add_argument("--output_dataset_name", type=str, default=None, help="Optional override for output dataset folder/file prefix.")
-parser.add_argument("--dataset_path", type=str, default="RLHFlow/UltraFeedback-preference-standard", help="Path to the dataset (HuggingFace path or local folder)")
+parser.add_argument("--dataset_path", type=str, default="data/Multi-Domain-Data-Preference-Pairs", help="Path to the dataset (HuggingFace path or local folder)")
 parser.add_argument("--source", default=None, type=str, help="Source filter for the dataset")
 parser.add_argument("--dataset_split", type=str, default="train", help="Dataset split to use. Use 'all' to aggregate all available splits.")
 parser.add_argument("--n_shards", type=int, default=1, help="Total number of shards to divide the dataset into")
