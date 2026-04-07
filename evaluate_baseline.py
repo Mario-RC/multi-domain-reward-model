@@ -12,6 +12,9 @@ import os
 import random
 import re
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from argparse import ArgumentParser
@@ -565,6 +568,60 @@ def evaluate_cultural_baseline(model, tokenizer, data_dir, device, max_length, p
     }
 
 
+# ---------------------------------------------------------------------------
+# Plot generation
+# ---------------------------------------------------------------------------
+
+def _save_fig(fig, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved: {path}")
+
+
+def _generate_plots(results, plots_dir):
+    """Generate per-model plots from baseline evaluation results."""
+    model_name = os.path.basename(results.get("model", "").rstrip("/"))
+
+    # Scoring: Spearman per attribute
+    scoring = results.get("scoring", {})
+    attrs_data = scoring.get("attributes", {})
+    if attrs_data:
+        attrs = [a for a in ATTRIBUTES if a in attrs_data]
+        vals = [attrs_data[a]["spearman"] for a in attrs]
+        if attrs:
+            fig, ax = plt.subplots(figsize=(8, max(5, len(attrs) * 0.35)))
+            colors = ["#4CAF50" if v >= 0.5 else "#FF9800" if v >= 0.3 else "#F44336" for v in vals]
+            ax.barh(attrs, vals, color=colors)
+            ax.set_xlabel("Spearman Correlation")
+            ax.set_title(f"{model_name} (baseline) — Spearman by Attribute")
+            ax.invert_yaxis()
+            ax.axvline(x=0.5, color="gray", linestyle="--", alpha=0.5, label="0.5 threshold")
+            ax.legend(fontsize=8)
+            _save_fig(fig, os.path.join(plots_dir, "spearman_by_attribute_baseline.png"))
+
+    # Preference: accuracy per domain
+    pref = results.get("preference", {})
+    domains_data = pref.get("domains", {})
+    if domains_data:
+        domains = sorted(domains_data.keys())
+        accs = [domains_data[d]["accuracy"] for d in domains]
+        fig, ax = plt.subplots(figsize=(8, 4))
+        bars = ax.bar(domains, accs, color="#2196F3")
+        for bar, v in zip(bars, accs):
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                    f"{v:.1f}%", ha="center", va="bottom", fontsize=9)
+        overall = pref.get("accuracy")
+        if overall is not None:
+            ax.axhline(y=overall, color="red", linestyle="--", alpha=0.7, label=f"Overall: {overall:.1f}%")
+            ax.legend()
+        ax.set_ylabel("Accuracy (%)")
+        ax.set_title(f"{model_name} (baseline) — Preference Accuracy by Domain")
+        ax.set_ylim(0, 105)
+        ax.tick_params(axis="x", rotation=30)
+        _save_fig(fig, os.path.join(plots_dir, "preference_by_domain_baseline.png"))
+
+
 def _save_results(results, args):
     """Save results JSON to model_parent_dir/<model_name>/results/eval_baseline.json."""
     if not args.model_name:
@@ -587,6 +644,10 @@ def _save_results(results, args):
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         print(f"\n  Results saved to {out_path}")
+
+    # Generate per-model plots
+    plots_dir = os.path.join(args.model_parent_dir, args.model_name, "results", "plots")
+    _generate_plots(results, plots_dir)
 
 
 def main() -> None:

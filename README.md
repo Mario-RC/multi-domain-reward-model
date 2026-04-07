@@ -1,4 +1,4 @@
-# Multi-Domain Model
+# Multi-Domain Reward Model
 
 This directory contains a multi-objective reward model that evaluates responses across four complementary domains: **Coherence**, **Commonsense**, **Empathy** and **Multicultural**. The model learns 23 fine-grained attributes spanning these domains and combines them through a prompt-conditioned gating network to produce a single preference score, enabling reward evaluation that captures domain-specific nuances.
 
@@ -235,7 +235,7 @@ python3 evaluate.py \
   --model_name multi-domain-rm-llama-3-8b-it \  # Name of the packaged model to evaluate
   --eval data/test                              # Optional: cultural test data directory
 ```
-Results are auto-saved to `model/<model_name>/results/eval.json` for each model.
+Results are auto-saved to `model/<model_name>/results/eval.json` for each model. Per-model plots are generated in `model/<model_name>/results/plots/`.
 
 > **Dual scoring evaluation (80pct / 100pct):** If the `_80pct.pt` weights file exists alongside the `_100pct.pt` used during packaging, `evaluate.py` evaluates scoring with **both** weight sets. Results are saved as `scoring_80pct` and `scoring_100pct` in the output JSON. The 80pct result reflects performance of the validation-best model; the 100pct result reflects the final model retrained on all data. Preference and cultural evaluations always use the 100pct weights (packaged in the model).
 
@@ -282,7 +282,7 @@ python3 evaluate_baseline.py \
   --skip_scoring \                              # Skip scoring, preference only
   --model_name multi-domain-rm-qwen-3-8b-it     # Save results under this model's directory
 ```
-Results are saved to `model/<model_name>/results/eval_baseline.json`.
+Results are saved to `model/<model_name>/results/eval_baseline.json`. Per-model plots are generated in `model/<model_name>/results/plots/`.
 
 ### Compare models
 
@@ -297,7 +297,7 @@ python3 compare_models.py \
 Discovers all models in `model/` that have `results/eval.json` or `results/eval_baseline.json`. Output includes:
 - **Comparison tables** — Preference accuracy, scoring regression, global score distribution.
 - **CSVs** — Saved to `model/compare_models/`.
-- **Plots** — Comparative plots in `model/compare_models/`, per-model plots in `model/<model_name>/results/plots/`.
+- **Plots** — Comparative plots in `model/compare_models/`.
 
 ---
 
