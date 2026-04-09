@@ -422,6 +422,28 @@ def _generate_plots(results, plots_dir):
             ax.legend(fontsize=8)
             _save_fig(fig, os.path.join(plots_dir, "spearman_by_attribute.png"))
 
+    # Cultural: attributes by country (data/test)
+    cultural = results.get("cultural", {})
+    countries_data = cultural.get("countries", {})
+    if countries_data:
+        countries = sorted(countries_data.keys())
+        sample = next(iter(countries_data.values()), {})
+        mu_attrs = sorted(sample.get("mu_attributes", {}).keys())
+        if mu_attrs:
+            x = np.arange(len(countries))
+            width = 0.8 / max(len(mu_attrs), 1)
+            fig, ax = plt.subplots(figsize=(max(10, len(countries) * 1.2), 5))
+            for j, attr in enumerate(mu_attrs):
+                vals = [countries_data.get(c, {}).get("mu_attributes", {}).get(attr, 0) for c in countries]
+                ax.bar(x + j * width, vals, width, label=attr.replace("mu_", ""))
+            ax.set_ylabel("Attribute Score")
+            ax.set_title(f"{model_name} — Cultural Attributes by Country")
+            ax.set_xticks(x + width * (len(mu_attrs) - 1) / 2)
+            ax.set_xticklabels(countries, rotation=45, ha="right", fontsize=8)
+            ax.legend(fontsize=7)
+            fig.tight_layout()
+            _save_fig(fig, os.path.join(plots_dir, "cultural_attributes_by_country.png"))
+
     # Preference: accuracy per domain
     pref = results.get("preference", {})
     domains_data = pref.get("domains", {})
