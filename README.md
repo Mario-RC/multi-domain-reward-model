@@ -291,6 +291,7 @@ Load pre-computed results from all models and produce side-by-side comparison ta
 ```bash
 python3 compare_models.py \
   --model_parent_dir model \                                                                         # Parent directory containing model subdirectories
+  --no_baselines \                                                                                   # Skip loading eval_baseline.json (optional)
   --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it multi-domain-rm-qwen-3-8b-it  # Models to compare
 ```
 

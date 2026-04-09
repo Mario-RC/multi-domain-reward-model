@@ -134,6 +134,7 @@ analyze_correlations:
 
 compare_models:
   model_parent_dir: model
+  no_baselines: false
 
 
 # --- Baseline evaluation ---

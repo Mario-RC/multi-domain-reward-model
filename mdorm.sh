@@ -125,4 +125,5 @@ CUDA_VISIBLE_DEVICES=0 python3 evaluate_baseline.py \
 ### compare models ###
 python3 compare_models.py \
   --model_parent_dir model \
+  --no_baselines \
   --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it multi-domain-rm-qwen-3-8b-it
