@@ -126,4 +126,10 @@ CUDA_VISIBLE_DEVICES=0 python3 evaluate_baseline.py \
 python3 compare_models.py \
   --model_parent_dir model \
   --no_baselines \
-  --models multi-domain-rm-fsfairx-llama-3-8b-it multi-domain-rm-fsfairx-gemma-2-9b-it multi-domain-rm-qwen-3-nemotron-8b-it
+  --models \
+    multi-domain-rm-fsfairx-llama-3-8b-it \
+    multi-domain-rm-fsfairx-gemma-2-9b-it \
+    multi-domain-rm-qwen-3-nemotron-8b-it \
+    multi-domain-rm-mistral-7b-it \
+    multi-domain-rm-skywork-llama-3.1-8b-it \
+    multi-domain-rm-skywork-qwen-3-8b-it

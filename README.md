@@ -305,9 +305,15 @@ Load pre-computed results from all models and produce side-by-side comparison ta
 
 ```bash
 python3 compare_models.py \
-  --model_parent_dir model \                                                                         # Parent directory containing model subdirectories
-  --no_baselines \                                                                                   # Skip loading eval_baseline.json (optional)
-  --models multi-domain-rm-fsfairx-llama-3-8b-it multi-domain-rm-fsfairx-gemma-2-9b-it multi-domain-rm-qwen-3-nemotron-8b-it multi-domain-rm-mistral-7b-it multi-domain-rm-skywork-llama-3.1-8b-it multi-domain-rm-skywork-qwen-3-8b-it  # Models to compare
+  --model_parent_dir model \
+  --no_baselines \
+  --models \
+    multi-domain-rm-fsfairx-llama-3-8b-it \
+    multi-domain-rm-fsfairx-gemma-2-9b-it \
+    multi-domain-rm-qwen-3-nemotron-8b-it \
+    multi-domain-rm-mistral-7b-it \
+    multi-domain-rm-skywork-llama-3.1-8b-it \
+    multi-domain-rm-skywork-qwen-3-8b-it
 ```
 
 Discovers all models in `model/` that have `results/eval.json` or `results/eval_baseline.json`. Output includes:
