@@ -15,13 +15,13 @@ Usage:
     python3 compare_models.py
 
     # Compare specific models:
-    python3 compare_models.py --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it
+    python3 compare_models.py --models multi-domain-rm-fsfairx-llama-3-8b-it multi-domain-rm-fsfairx-gemma-2-9b-it
 
     # Custom model directory:
     python3 compare_models.py --model_parent_dir model
 
     # Skip baselines (only compare trained models):
-    python3 compare_models.py --no_baselines --models multi-domain-rm-llama-3-8b-it
+    python3 compare_models.py --no_baselines --models multi-domain-rm-fsfairx-llama-3-8b-it
 """
 
 import csv

@@ -664,7 +664,7 @@ def main() -> None:
     parser.add_argument("--eval", type=str, default=None, help="Path to cultural test JSON directory (e.g. data/test). Enables cultural evaluation.")
     parser.add_argument("--generative_judge", action="store_true", help="Use generative judge (e.g. BRRM) for preference evaluation. Loads model as CausalLM.")
     parser.add_argument("--max_gen_tokens", type=int, default=8192, help="Max new tokens per generation turn (generative judge mode).")
-    parser.add_argument("--model_name", type=str, default=None, help="Packaged model dir name (e.g. multi-domain-rm-llama-3-8b-it). Results saved to model/<model_name>/results/eval_baseline.json.")
+    parser.add_argument("--model_name", type=str, default=None, help="Packaged model dir name (e.g. multi-domain-rm-fsfairx-llama-3-8b-it). Results saved to model/<model_name>/results/eval_baseline.json.")
     parser.add_argument("--model_parent_dir", type=str, default="model", help="Parent directory for saving results.")
     parser.add_argument("--output_json", type=str, default=None, help="Custom path to save results JSON.")
     args = parser.parse_args()

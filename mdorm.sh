@@ -95,18 +95,18 @@ CUDA_VISIBLE_DEVICES=0 python3 stage-3_package_model.py \
   --corr_threshold 0.04 \
   --logit_scale 2.0 \
   --curriculum \
-  --output_model_name multi-domain-rm-llama-3-8b-it
+  --output_model_name multi-domain-rm-fsfairx-llama-3-8b-it
 
 ##########################################
 ### evaluate ###
 CUDA_VISIBLE_DEVICES=0 python3 evaluate.py \
-  --model_name multi-domain-rm-llama-3-8b-it \
+  --model_name multi-domain-rm-fsfairx-llama-3-8b-it \
   --eval data/test
 
 ##########################################
 ### predict ###
 CUDA_VISIBLE_DEVICES=0 python3 predict.py \
-  --model_name multi-domain-rm-llama-3-8b-it
+  --model_name multi-domain-rm-fsfairx-llama-3-8b-it
 
 ##########################################
 ### analyze attribute correlations ###
@@ -119,11 +119,11 @@ CUDA_VISIBLE_DEVICES=0 python3 analyze_correlations.py \
 CUDA_VISIBLE_DEVICES=0 python3 evaluate_baseline.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \
   --eval data/test \
-  --model_name multi-domain-rm-llama-3-8b-it
+  --model_name multi-domain-rm-fsfairx-llama-3-8b-it
 
 ##########################################
 ### compare models ###
 python3 compare_models.py \
   --model_parent_dir model \
   --no_baselines \
-  --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it multi-domain-rm-qwen-3-8b-it
+  --models multi-domain-rm-fsfairx-llama-3-8b-it multi-domain-rm-fsfairx-gemma-2-9b-it multi-domain-rm-qwen-3-nemotron-8b-it
