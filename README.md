@@ -31,10 +31,12 @@ The multi-domain data (Multi-Domain-Data-Scoring.jsonl & Multi-Domain-Data-Prefe
 
 The following base reward models have been used in this project:
 
-- **Llama3:** [`sfairXC/FsfairX-LLaMA3-RM-v0.1`](https://huggingface.co/sfairXC/FsfairX-LLaMA3-RM-v0.1)
-- **Gemma2:** [`sfairXC/FsfairX-Gemma2-RM-v0.1`](https://huggingface.co/sfairXC/FsfairX-Gemma2-RM-v0.1)
-- **Qwen3:** [`nvidia/Qwen3-Nemotron-8B-BRRM`](https://huggingface.co/nvidia/Qwen3-Nemotron-8B-BRRM)
+- **FsfairX Llama3:** [`sfairXC/FsfairX-LLaMA3-RM-v0.1`](https://huggingface.co/sfairXC/FsfairX-LLaMA3-RM-v0.1)
+- **FsfairX Gemma2:** [`sfairXC/FsfairX-Gemma2-RM-v0.1`](https://huggingface.co/sfairXC/FsfairX-Gemma2-RM-v0.1)
+- **Qwen3 Nemotron:** [`nvidia/Qwen3-Nemotron-8B-BRRM`](https://huggingface.co/nvidia/Qwen3-Nemotron-8B-BRRM)
 - **Mistral:** [`weqweasdas/RM-Mistral-7B`](https://huggingface.co/weqweasdas/RM-Mistral-7B)
+- **Skywork Llama3.1:** [`Skywork/Skywork-Reward-V2-Llama-3.1-8B`](https://huggingface.co/Skywork/Skywork-Reward-V2-Llama-3.1-8B)
+- **Skywork Qwen3:** [`Skywork/Skywork-Reward-V2-Qwen3-8B`](https://huggingface.co/Skywork/Skywork-Reward-V2-Qwen3-8B)
 
 ---
 
@@ -95,16 +97,10 @@ Base script: `mdorm.sh`
 ./mdorm.sh
 ```
 
-`mdorm.sh` is intentionally fixed to Llama3 defaults for a stable baseline run.
-
-Additional per-model scripts are available for full train/package/evaluate runs:
-
-- `mdorm_llama3.sh`
-- `mdorm_gemma2.sh`
-- `mdorm_qwen3.sh`
-- `mdorm_mistral.sh`
+`mdorm.sh` is intentionally fixed to FsfairX Llama3 defaults for a stable baseline run.
 
 ### Stage 1 prepare
+
 ```bash
 python3 stage-1_prepare.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \      # Base reward model to extract embeddings from
@@ -118,6 +114,7 @@ python3 stage-1_prepare.py \
 ```
 
 ### Stage 1 train
+
 ```bash
 python3 stage-1_train.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \               # Base reward model (used to name outputs)
@@ -133,6 +130,7 @@ python3 stage-1_train.py \
 > Subsequent stages auto-resolve to `_100pct.pt` unless `--stage_1_weights_path` is explicitly passed.
 
 ### Stage 2 prepare (preference data)
+
 ```bash
 python3 stage-2_prepare.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \               # Base reward model
@@ -146,6 +144,7 @@ python3 stage-2_prepare.py \
 ```
 
 ### Stage 2 prepare (reference data)
+
 ```bash
 python3 stage-2_prepare.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \               # Base reward model
@@ -159,6 +158,7 @@ python3 stage-2_prepare.py \
 ```
 
 ### Stage 2 prepare (reward-bench eval data)
+
 ```bash
 python3 stage-2_prepare.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \  # Base reward model
@@ -172,6 +172,7 @@ python3 stage-2_prepare.py \
 ```
 
 ### Stage 2 train
+
 ```bash
 python3 stage-2_train.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \                   # Base reward model (used for naming)
@@ -212,6 +213,7 @@ python3 stage-2_train.py \
 > - In a multi-domain setup, you could set `debiasing_dims` to one or more dominant dimensions (e.g. `--debiasing_dims 21 18` for cultural and empathy attributes) if you observe them correlating too strongly with others in the reference dataset.
 
 ### Stage 3 Packaging Model
+
 ```bash
 python3 stage-3_package_model.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \                   # Base reward model to package
@@ -231,26 +233,30 @@ python3 stage-3_package_model.py \
   --corr_threshold 0.04 \                                         # Must match stage-2 value
   --logit_scale 2.0 \                                             # Must match stage-2 value
   --curriculum \                                                  # Must match stage-2 value (adds _cv suffix to checkpoint name)
-  --output_model_name multi-domain-rm-llama-3-8b-it               # Name for the packaged HuggingFace model
+  --output_model_name multi-domain-rm-fsfairx-llama-3-8b-it               # Name for the packaged HuggingFace model
 ```
+
 > All hyperparameters (`--temperature`, `--n_steps`, `--seed`, `--learning_rate`, `--weight_decay`, `--n_hidden`, `--hidden_size`, `--dropout`, `--batch_size`, `--corr_threshold`, `--logit_scale`) must match the values used during Stage 2 training so the correct checkpoint file is found. Pass `null` for reference_dataset_name if Stage 2 was trained without a reference dataset. If Stage 2 was trained with `--curriculum`, add `--curriculum` here too so the `_cv` suffix is included in the checkpoint filename.
 >
 > **`--stage_1_weights_path` (optional):** Same auto-resolution logic as Stage 2 — defaults to `_100pct.pt` if omitted.
 
 ### Evaluate the packaged model
+
 ```bash
 python3 evaluate.py \
-  --model_name multi-domain-rm-llama-3-8b-it \  # Name of the packaged model to evaluate
+  --model_name multi-domain-rm-fsfairx-llama-3-8b-it \  # Name of the packaged model to evaluate
   --eval data/test                              # Optional: cultural test data directory
 ```
+
 Results are auto-saved to `model/<model_name>/results/eval.json` for each model. Per-model plots are generated in `model/<model_name>/results/plots/`.
 
 > **Dual scoring evaluation (80pct / 100pct):** If the `_80pct.pt` weights file exists alongside the `_100pct.pt` used during packaging, `evaluate.py` evaluates scoring with **both** weight sets. Results are saved as `scoring_80pct` and `scoring_100pct` in the output JSON. The 80pct result reflects performance of the validation-best model; the 100pct result reflects the final model retrained on all data. Preference and cultural evaluations always use the 100pct weights (packaged in the model).
 
 ### Run quick prediction comparison
+
 ```bash
 python3 predict.py \
-  --model_name multi-domain-rm-llama-3-8b-it  # Name of the packaged model to run predictions with
+  --model_name multi-domain-rm-fsfairx-llama-3-8b-it  # Name of the packaged model to run predictions with
 ```
 
 ### Analyze attribute correlations
@@ -277,19 +283,20 @@ Output sections:
 Evaluate a base reward model (as-is from HuggingFace) using its native reward score. Use `--model_name` to save results as `eval_baseline.json` inside the corresponding packaged model's results directory.
 
 ```bash
-# Scalar RM — scoring + preference + cultural (LLaMA3, Gemma2, Mistral)
+# Scalar RM — scoring + preference + cultural (FsfairX LLaMA3, FsfairX Gemma2, Mistral, Skywork LLaMA3.1, Skywork Gemma2)
 python3 evaluate_baseline.py \
   --model_path sfairXC/FsfairX-LLaMA3-RM-v0.1 \  # Base reward model path
   --eval data/test \                              # Optional: cultural test data directory
-  --model_name multi-domain-rm-llama-3-8b-it      # Save results under this model's directory
+  --model_name multi-domain-rm-fsfairx-llama-3-8b-it      # Save results under this model's directory
 
-# Generative judge — preference only (BRRM)
+# Generative judge — preference only (Qwen3-Nemotron)
 python3 evaluate_baseline.py \
   --model_path nvidia/Qwen3-Nemotron-8B-BRRM \  # Base reward model path
   --generative_judge \                          # Use generative judge mode
   --skip_scoring \                              # Skip scoring, preference only
-  --model_name multi-domain-rm-qwen-3-8b-it     # Save results under this model's directory
+  --model_name multi-domain-rm-qwen-3-nemotron-8b-it     # Save results under this model's directory
 ```
+
 Results are saved to `model/<model_name>/results/eval_baseline.json`. Per-model plots are generated in `model/<model_name>/results/plots/`.
 
 ### Compare models
@@ -300,7 +307,7 @@ Load pre-computed results from all models and produce side-by-side comparison ta
 python3 compare_models.py \
   --model_parent_dir model \                                                                         # Parent directory containing model subdirectories
   --no_baselines \                                                                                   # Skip loading eval_baseline.json (optional)
-  --models multi-domain-rm-llama-3-8b-it multi-domain-rm-gemma-2-9b-it multi-domain-rm-qwen-3-8b-it multi-domain-rm-mistral-7b-it  # Models to compare
+  --models multi-domain-rm-fsfairx-llama-3-8b-it multi-domain-rm-fsfairx-gemma-2-9b-it multi-domain-rm-qwen-3-nemotron-8b-it multi-domain-rm-mistral-7b-it multi-domain-rm-skywork-llama-3.1-8b-it multi-domain-rm-skywork-qwen-3-8b-it  # Models to compare
 ```
 
 Discovers all models in `model/` that have `results/eval.json` or `results/eval_baseline.json`. Output includes:
