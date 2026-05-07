@@ -361,8 +361,8 @@ model/
 │   └── gating_network_<model_name>_mo_<multi_objective_dataset_name>_pref_<preference_dataset_name>_ref_<reference_dataset_name>_t2.0_n30000_seed0_le0.0005_we0.0_n_1_hi64_dr0.1_ba2048_co0.04_lo2.0.pt
 │
 ├── regression_weights/
-│   ├── <model_name>_<multi_objective_dataset_name>_100pct.pt
-│   └── <model_name>_<multi_objective_dataset_name>_80pct.pt
+│   ├── <model_name>_<multi_objective_dataset_name>_80pct.pt
+│   └── <model_name>_<multi_objective_dataset_name>_100pct.pt
 │
 ├── multi-domain-rm-<model_name>/
 │   ├── config.json
