@@ -35,6 +35,8 @@ import numpy as np
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.patches import Rectangle
 
 from datetime import datetime
 from attributes import ATTRIBUTES, DOMAIN_PREFIXES
@@ -45,6 +47,81 @@ DEFAULT_MODEL_PARENT_DIR = "model"
 
 # Color palette for consistent model colors across plots.
 MODEL_COLORS = ["#2196F3", "#FF5722", "#4CAF50", "#9C27B0", "#FF9800", "#00BCD4", "#E91E63", "#795548"]
+DIFFICULTY_ORDER = ["easy", "medium", "hard"]
+BLUE_ORANGE_CMAP = LinearSegmentedColormap.from_list(
+    "blue_orange_accessible",
+    ["#0072B2", "#E8ECF3", "#E69F00"],
+)
+
+
+def _split_display_suffix(model_name):
+    match = re.search(r"\s+\([^)]*\)$", model_name)
+    if not match:
+        return model_name, ""
+    return model_name[:match.start()], match.group(0)
+
+
+def _canonical_base_name(model_name):
+    base_name, _ = _split_display_suffix(model_name)
+    match = re.match(r"^(multi-domain-rm-.+?-it)(?:[-_ ].*)?$", base_name)
+    if match:
+        return match.group(1)
+    return base_name
+
+
+def _lighten_hex(hex_color, amount=0.55):
+    """Mix a hex color with white; amount=0 keeps original, amount=1 returns white."""
+    color = hex_color.lstrip("#")
+    rgb = [int(color[i:i + 2], 16) for i in (0, 2, 4)]
+    mixed = [round(channel + (255 - channel) * amount) for channel in rgb]
+    return "#" + "".join(f"{channel:02X}" for channel in mixed)
+
+
+def _result_color_key(result):
+    return _canonical_base_name(result.get("_base_name", result["_name"]))
+
+
+def _result_color_map(results):
+    color_map = {}
+    for r in results:
+        key = _result_color_key(r)
+        if key not in color_map:
+            color_map[key] = MODEL_COLORS[len(color_map) % len(MODEL_COLORS)]
+    return color_map
+
+
+def _result_color(result, color_map):
+    base_color = color_map[_result_color_key(result)]
+    if result.get("_is_baseline"):
+        return _lighten_hex(base_color)
+    return base_color
+
+
+def _result_colors(results):
+    color_map = _result_color_map(results)
+    return [_result_color(r, color_map) for r in results]
+
+
+def _ordered_difficulties(difficulties):
+    ordered = [d for d in DIFFICULTY_ORDER if d in difficulties]
+    ordered.extend(sorted(d for d in difficulties if d not in DIFFICULTY_ORDER))
+    return ordered
+
+
+def _attribute_prefix(attribute):
+    return attribute.split("_", 1)[0] if "_" in attribute else attribute
+
+
+def _attributes_with_group_gaps(attributes):
+    grouped = []
+    previous_prefix = None
+    for attribute in attributes:
+        prefix = _attribute_prefix(attribute)
+        if previous_prefix is not None and prefix != previous_prefix:
+            grouped.append(None)
+        grouped.append(attribute)
+        previous_prefix = prefix
+    return grouped
 
 
 # ---------------------------------------------------------------------------
@@ -96,19 +173,23 @@ def load_results(path):
 
 def canonical_model_name(model_name):
     """Strip run-specific suffixes appended after the canonical model name."""
-    match = re.search(r"\s+\([^)]*\)$", model_name)
-    display_suffix = match.group(0) if match else ""
-    base_name = model_name[:match.start()] if match else model_name
-
-    match = re.match(r"^(multi-domain-rm-.+?-it)(?:[-_ ].*)?$", base_name)
-    if match:
-        return f"{match.group(1)}{display_suffix}"
-    return model_name
+    _, display_suffix = _split_display_suffix(model_name)
+    base_name = _canonical_base_name(model_name)
+    return f"{base_name.replace('multi-domain-rm-', '', 1)}{display_suffix}"
 
 
 def short_name(model_name):
     """Display name for plots/tables."""
     return canonical_model_name(model_name)
+
+
+def axis_model_label(model_name):
+    """Display name for model names used as horizontal axis labels."""
+    name = short_name(model_name)
+    suffix = " (baseline)"
+    if name.endswith(suffix):
+        return f"{name[:-len(suffix)]}\nbaseline"
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +227,7 @@ def print_preference_table(all_results):
         all_diffs.update(r.get("preference", {}).get("difficulty", {}).keys())
     if all_diffs:
         print(f"\n  {'--- By difficulty ---':>20}")
-        for diff in sorted(all_diffs):
+        for diff in _ordered_difficulties(all_diffs):
             row = f"  {diff:>20}"
             for r in all_results:
                 d = r.get("preference", {}).get("difficulty", {}).get(diff)
@@ -286,6 +367,7 @@ def plot_preference_accuracy_by_domain(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in all_results]
+    colors = _result_colors(all_results)
     x = np.arange(len(domains))
     width = 0.8 / max(len(all_results), 1)
 
@@ -295,7 +377,7 @@ def plot_preference_accuracy_by_domain(all_results, shared_plots_dir):
         for d in domains:
             dd = r.get("preference", {}).get("domains", {}).get(d)
             vals.append(dd["accuracy"] if dd else 0)
-        ax.bar(x + i * width, vals, width, label=names[i], color=MODEL_COLORS[i % len(MODEL_COLORS)])
+        ax.bar(x + i * width, vals, width, label=names[i], color=colors[i])
 
     ax.set_ylabel("Accuracy (%)")
     ax.set_title("Preference Accuracy by Domain")
@@ -312,11 +394,12 @@ def plot_preference_accuracy_by_difficulty(all_results, shared_plots_dir):
     all_diffs = set()
     for r in all_results:
         all_diffs.update(r.get("preference", {}).get("difficulty", {}).keys())
-    diffs = sorted(all_diffs)
+    diffs = _ordered_difficulties(all_diffs)
     if not diffs:
         return
 
     names = [short_name(r["_name"]) for r in all_results]
+    colors = _result_colors(all_results)
     x = np.arange(len(diffs))
     width = 0.8 / max(len(all_results), 1)
 
@@ -326,7 +409,7 @@ def plot_preference_accuracy_by_difficulty(all_results, shared_plots_dir):
         for d in diffs:
             dd = r.get("preference", {}).get("difficulty", {}).get(d)
             vals.append(dd["accuracy"] if dd else 0)
-        ax.bar(x + i * width, vals, width, label=names[i], color=MODEL_COLORS[i % len(MODEL_COLORS)])
+        ax.bar(x + i * width, vals, width, label=names[i], color=colors[i])
 
     ax.set_ylabel("Accuracy (%)")
     ax.set_title("Preference Accuracy by Difficulty")
@@ -348,6 +431,7 @@ def plot_scoring_spearman_by_domain(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in all_results]
+    colors = _result_colors(all_results)
     x = np.arange(len(domains))
     width = 0.8 / max(len(all_results), 1)
 
@@ -357,7 +441,7 @@ def plot_scoring_spearman_by_domain(all_results, shared_plots_dir):
         for d in domains:
             dd = r.get("scoring", {}).get("domains", {}).get(d)
             vals.append(dd["spearman"] if dd else 0)
-        ax.bar(x + i * width, vals, width, label=names[i], color=MODEL_COLORS[i % len(MODEL_COLORS)])
+        ax.bar(x + i * width, vals, width, label=names[i], color=colors[i])
 
     ax.set_ylabel("Spearman Correlation")
     ax.set_title("Scoring Spearman by Domain")
@@ -371,6 +455,7 @@ def plot_scoring_spearman_by_domain(all_results, shared_plots_dir):
 def plot_scoring_spearman_by_attribute(all_results, shared_plots_dir):
     """Horizontal bar chart: Spearman per attribute for each model."""
     names = [short_name(r["_name"]) for r in all_results]
+    colors = _result_colors(all_results)
     attrs_with_data = [a for a in ATTRIBUTES if any(
         r.get("scoring", {}).get("attributes", {}).get(a) for r in all_results
     )]
@@ -386,7 +471,7 @@ def plot_scoring_spearman_by_attribute(all_results, shared_plots_dir):
         for a in attrs_with_data:
             ad = r.get("scoring", {}).get("attributes", {}).get(a)
             vals.append(ad["spearman"] if ad else 0)
-        ax.barh(y + i * height, vals, height, label=names[i], color=MODEL_COLORS[i % len(MODEL_COLORS)])
+        ax.barh(y + i * height, vals, height, label=names[i], color=colors[i])
 
     ax.set_xlabel("Spearman Correlation")
     ax.set_title("Scoring Spearman by Attribute")
@@ -408,6 +493,7 @@ def plot_scoring_mse_by_domain(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in all_results]
+    colors = _result_colors(all_results)
     x = np.arange(len(domains))
     width = 0.8 / max(len(all_results), 1)
 
@@ -417,7 +503,7 @@ def plot_scoring_mse_by_domain(all_results, shared_plots_dir):
         for d in domains:
             dd = r.get("scoring", {}).get("domains", {}).get(d)
             vals.append(dd["mse"] if dd else 0)
-        ax.bar(x + i * width, vals, width, label=names[i], color=MODEL_COLORS[i % len(MODEL_COLORS)])
+        ax.bar(x + i * width, vals, width, label=names[i], color=colors[i])
 
     ax.set_ylabel("MSE (log scale)")
     ax.set_title("Scoring MSE by Domain (lower is better)")
@@ -432,22 +518,25 @@ def plot_scoring_mse_by_domain(all_results, shared_plots_dir):
 def plot_overall_preference(all_results, shared_plots_dir):
     """Bar chart: overall preference accuracy per model."""
     names = [short_name(r["_name"]) for r in all_results]
+    xlabels = [axis_model_label(r["_name"]) for r in all_results]
     pref_accs = []
     for r in all_results:
         pa = r.get("preference", {}).get("accuracy")
         pref_accs.append(pa if pa is not None else 0)
 
-    colors = [MODEL_COLORS[i % len(MODEL_COLORS)] for i in range(len(names))]
+    colors = _result_colors(all_results)
+    x = np.arange(len(all_results))
 
-    fig, ax = plt.subplots(figsize=(max(6, len(names) * 1.5), 7))
-    bars = ax.bar(names, pref_accs, color=colors)
+    fig, ax = plt.subplots(figsize=(max(10, len(names) * 2.1), 7))
+    bars = ax.bar(x, pref_accs, color=colors)
     for bar, v in zip(bars, pref_accs):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
                 f"{v:.1f}%", ha="center", va="bottom", fontsize=9)
     ax.set_ylabel("Accuracy (%)")
     ax.set_title("Overall Preference Accuracy")
     ax.set_ylim(0, 105)
-    ax.tick_params(axis="x", rotation=30)
+    ax.set_xticks(x)
+    ax.set_xticklabels(xlabels, rotation=0, ha="center", fontsize=8)
     fig.tight_layout()
     _save_fig(fig, os.path.join(shared_plots_dir, "overall_preference_accuracy.png"))
 
@@ -455,27 +544,30 @@ def plot_overall_preference(all_results, shared_plots_dir):
 def plot_overall_scoring(all_results, shared_plots_dir):
     """Bar chart: average scoring Spearman per model."""
     names = [short_name(r["_name"]) for r in all_results]
+    xlabels = [axis_model_label(r["_name"]) for r in all_results]
     spear_avgs = []
     for r in all_results:
         sa = r.get("scoring", {}).get("average", {}).get("spearman")
         spear_avgs.append(sa if sa is not None else 0)
 
-    colors = [MODEL_COLORS[i % len(MODEL_COLORS)] for i in range(len(names))]
+    colors = _result_colors(all_results)
+    x = np.arange(len(all_results))
 
-    fig, ax = plt.subplots(figsize=(max(6, len(names) * 1.5), 7))
-    bars = ax.bar(names, spear_avgs, color=colors)
+    fig, ax = plt.subplots(figsize=(max(10, len(names) * 2.1), 7))
+    bars = ax.bar(x, spear_avgs, color=colors)
     for bar, v in zip(bars, spear_avgs):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
                 f"{v:.3f}", ha="center", va="bottom", fontsize=9)
     ax.set_ylabel("Spearman Correlation")
     ax.set_title("Average Scoring Spearman")
-    ax.tick_params(axis="x", rotation=30)
+    ax.set_xticks(x)
+    ax.set_xticklabels(xlabels, rotation=0, ha="center", fontsize=8)
     fig.tight_layout()
     _save_fig(fig, os.path.join(shared_plots_dir, "overall_scoring_spearman.png"))
 
 
-def plot_scoring_100pct_vs_80pct(all_results, shared_plots_dir):
-    """Grouped bar chart: Spearman for 100pct vs 80pct per model and domain."""
+def plot_scoring_80pct_vs_100pct(all_results, shared_plots_dir):
+    """Grouped bar chart: Spearman for 80pct vs 100pct per model and domain."""
     # Only use non-baseline results that have both splits
     models = [r for r in all_results if not r.get("_is_baseline")
               and r.get("scoring_100pct") and r.get("scoring_80pct")]
@@ -491,6 +583,7 @@ def plot_scoring_100pct_vs_80pct(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in models]
+    colors = _result_colors(models)
     n_models = len(models)
     n_groups = len(domains)
     x = np.arange(n_groups)
@@ -499,19 +592,19 @@ def plot_scoring_100pct_vs_80pct(all_results, shared_plots_dir):
 
     fig, ax = plt.subplots(figsize=(max(10, n_groups * 2.5), 8))
     for i, r in enumerate(models):
-        vals_100 = [r["scoring_100pct"].get("domains", {}).get(d, {}).get("spearman", 0) for d in domains]
         vals_80 = [r["scoring_80pct"].get("domains", {}).get(d, {}).get("spearman", 0) for d in domains]
-        color = MODEL_COLORS[i % len(MODEL_COLORS)]
-        ax.bar(x + (i * 2) * width, vals_100, width, label=f"{names[i]} 100%", color=color, alpha=1.0)
-        ax.bar(x + (i * 2 + 1) * width, vals_80, width, label=f"{names[i]} 80%", color=color, alpha=0.5)
+        vals_100 = [r["scoring_100pct"].get("domains", {}).get(d, {}).get("spearman", 0) for d in domains]
+        color = colors[i]
+        ax.bar(x + (i * 2) * width, vals_80, width, label=f"{names[i]} 80%", color=color, alpha=0.5)
+        ax.bar(x + (i * 2 + 1) * width, vals_100, width, label=f"{names[i]} 100%", color=color, alpha=1.0)
 
     ax.set_ylabel("Spearman Correlation")
-    ax.set_title("Scoring Spearman: 100% vs 80% Training Data")
+    ax.set_title("Scoring Spearman: 80% vs 100% Training Data")
     ax.set_xticks(x + width * (total_bars - 1) / 2)
     ax.set_xticklabels(domains, rotation=30, ha="right")
     ax.legend(loc="upper right", fontsize=10)
     fig.tight_layout()
-    _save_fig(fig, os.path.join(shared_plots_dir, "scoring_100pct_vs_80pct.png"))
+    _save_fig(fig, os.path.join(shared_plots_dir, "scoring_80pct_vs_100pct.png"))
 
 
 def plot_cultural_score_by_country(all_results, shared_plots_dir):
@@ -528,13 +621,14 @@ def plot_cultural_score_by_country(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in models]
+    colors = _result_colors(models)
     x = np.arange(len(countries))
     width = 0.8 / max(len(models), 1)
 
     fig, ax = plt.subplots(figsize=(max(14, len(countries) * 1.5), 8))
     for i, r in enumerate(models):
         vals = [r["cultural"]["countries"].get(c, {}).get("score_mean", 0) for c in countries]
-        ax.bar(x + i * width, vals, width, label=names[i], color=MODEL_COLORS[i % len(MODEL_COLORS)])
+        ax.bar(x + i * width, vals, width, label=names[i], color=colors[i])
 
     ax.set_ylabel("Mean Score")
     ax.set_title("Cultural Evaluation — Mean Score by Country")
@@ -620,8 +714,8 @@ def plot_scoring_spearman_heatmap(all_results, shared_plots_dir):
     _save_fig(fig, os.path.join(shared_plots_dir, "scoring_spearman_heatmap.png"))
 
 
-def plot_scoring_100pct_vs_80pct_paired(all_results, shared_plots_dir):
-    """Paired scatter plot: 100% vs 80% Spearman per domain, lines connecting pairs."""
+def plot_scoring_80pct_vs_100pct_paired(all_results, shared_plots_dir):
+    """Paired scatter plot: 80% vs 100% Spearman per domain, lines connecting pairs."""
     models = [r for r in all_results if not r.get("_is_baseline")
               and r.get("scoring_100pct") and r.get("scoring_80pct")]
     if not models:
@@ -635,27 +729,28 @@ def plot_scoring_100pct_vs_80pct_paired(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in models]
+    colors = _result_colors(models)
 
     fig, ax = plt.subplots(figsize=(10, 8))
     for i, r in enumerate(models):
-        color = MODEL_COLORS[i % len(MODEL_COLORS)]
+        color = colors[i]
         for j, d in enumerate(domains):
-            v100 = r["scoring_100pct"].get("domains", {}).get(d, {}).get("spearman", 0)
             v80 = r["scoring_80pct"].get("domains", {}).get(d, {}).get("spearman", 0)
+            v100 = r["scoring_100pct"].get("domains", {}).get(d, {}).get("spearman", 0)
             x_pos = j + i * 0.15 - 0.15
             ax.plot([x_pos, x_pos], [v80, v100], color=color, linewidth=2, alpha=0.7)
-            ax.scatter(x_pos, v100, color=color, marker="o", s=60, zorder=5,
-                       label=f"{names[i]} 100%" if j == 0 else "")
             ax.scatter(x_pos, v80, color=color, marker="^", s=60, zorder=5, alpha=0.5,
                        label=f"{names[i]} 80%" if j == 0 else "")
+            ax.scatter(x_pos, v100, color=color, marker="o", s=60, zorder=5,
+                       label=f"{names[i]} 100%" if j == 0 else "")
 
     ax.set_xticks(range(len(domains)))
     ax.set_xticklabels(domains, rotation=30, ha="right")
     ax.set_ylabel("Spearman Correlation")
-    ax.set_title("Scoring Spearman: 100% vs 80% (paired)")
+    ax.set_title("Scoring Spearman: 80% vs 100% (paired)")
     ax.legend(loc="upper right", fontsize=10)
     fig.tight_layout()
-    _save_fig(fig, os.path.join(shared_plots_dir, "scoring_100pct_vs_80pct_paired.png"))
+    _save_fig(fig, os.path.join(shared_plots_dir, "scoring_80pct_vs_100pct_paired.png"))
 
 
 def plot_cultural_score_radar(all_results, shared_plots_dir):
@@ -672,6 +767,7 @@ def plot_cultural_score_radar(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in models]
+    colors = _result_colors(models)
     n = len(countries)
     angles = np.linspace(0, 2 * np.pi, n, endpoint=False).tolist()
     angles += angles[:1]  # close the polygon
@@ -680,8 +776,8 @@ def plot_cultural_score_radar(all_results, shared_plots_dir):
     for i, r in enumerate(models):
         vals = [r["cultural"]["countries"].get(c, {}).get("score_mean", 0) for c in countries]
         vals += vals[:1]
-        ax.plot(angles, vals, linewidth=2, label=names[i], color=MODEL_COLORS[i % len(MODEL_COLORS)])
-        ax.fill(angles, vals, alpha=0.1, color=MODEL_COLORS[i % len(MODEL_COLORS)])
+        ax.plot(angles, vals, linewidth=2, label=names[i], color=colors[i])
+        ax.fill(angles, vals, alpha=0.1, color=colors[i])
 
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(countries, fontsize=9)
@@ -702,11 +798,12 @@ def plot_cultural_arousal_lines(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in models]
+    colors = _result_colors(models)
 
     fig, ax = plt.subplots(figsize=(10, 8))
     for i, r in enumerate(models):
         vals = [r["cultural"]["arousal"].get(a, {}).get("mean", 0) for a in arousal_levels]
-        color = MODEL_COLORS[i % len(MODEL_COLORS)]
+        color = colors[i]
         ax.plot(arousal_levels, vals, marker="o", linewidth=2.5, markersize=8,
                 label=names[i], color=color)
 
@@ -763,7 +860,7 @@ def export_csvs(all_results, output_dir):
         all_diffs.update(r.get("preference", {}).get("difficulty", {}).keys())
     if all_diffs:
         rows = []
-        for diff in sorted(all_diffs):
+        for diff in _ordered_difficulties(all_diffs):
             row = [diff]
             for r in all_results:
                 d = r.get("preference", {}).get("difficulty", {}).get(diff)
@@ -859,8 +956,8 @@ def generate_plots(all_results, model_parent_dir):
     # Scoring 100pct vs 80pct
     has_both_splits = any(r.get("scoring_100pct") and r.get("scoring_80pct") for r in all_results)
     if has_both_splits:
-        plot_scoring_100pct_vs_80pct(all_results, shared_plots_dir)
-        plot_scoring_100pct_vs_80pct_paired(all_results, shared_plots_dir)
+        plot_scoring_80pct_vs_100pct(all_results, shared_plots_dir)
+        plot_scoring_80pct_vs_100pct_paired(all_results, shared_plots_dir)
 
     # Cultural evaluation (data/test)
     has_cultural = any(r.get("cultural") for r in all_results)
@@ -951,6 +1048,15 @@ def main():
     # Load cached results
     all_results = []
     for name in model_names:
+        baseline_path = _baseline_results_path(args.model_parent_dir, name)
+        if not args.no_baselines and os.path.isfile(baseline_path):
+            print(f"  Loading: {baseline_path}")
+            rb = load_results(baseline_path)
+            rb["_name"] = f"{name} (baseline)"
+            rb["_base_name"] = name
+            rb["_is_baseline"] = True
+            all_results.append(rb)
+
         json_path = _results_path(args.model_parent_dir, name)
         if os.path.isfile(json_path):
             print(f"  Loading: {json_path}")
@@ -960,15 +1066,6 @@ def main():
         else:
             print(f"  WARNING: No results for {name} at {json_path}, skipping.")
             print(f"           Run: python3 evaluate.py --model_name {name}")
-
-        baseline_path = _baseline_results_path(args.model_parent_dir, name)
-        if not args.no_baselines and os.path.isfile(baseline_path):
-            print(f"  Loading: {baseline_path}")
-            rb = load_results(baseline_path)
-            rb["_name"] = f"{name} (baseline)"
-            rb["_base_name"] = name
-            rb["_is_baseline"] = True
-            all_results.append(rb)
 
     if len(all_results) < 1:
         print("No results to compare. Run evaluate.py for each model first.")
