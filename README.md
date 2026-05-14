@@ -88,7 +88,6 @@ This version uses **23 custom attributes** defined in `attributes.py` (single so
 This environment requires **Python 3.12**. Create or activate a Python 3.12 virtual environment before installing the dependencies.
 
 ```bash
-python -V
 python -m pip install -r requirements.txt
 ```
 
