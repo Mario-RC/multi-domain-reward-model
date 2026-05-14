@@ -693,6 +693,72 @@ def plot_cultural_score_by_country(all_results, shared_plots_dir):
     _save_fig(fig, os.path.join(shared_plots_dir, "cultural_score_by_country.png"))
 
 
+def plot_cultural_country_score_violin(all_results, shared_plots_dir):
+    """Violin plot: distribution of country-level cultural scores per model."""
+    models = [r for r in all_results if r.get("cultural") and not r.get("_is_baseline")]
+    if not models:
+        return
+
+    names = [short_name(r["_name"]) for r in models]
+    colors = _result_colors(models)
+    plot_rows = []
+    for name, color, r in zip(names, colors, models):
+        countries = r.get("cultural", {}).get("countries", {})
+        vals = [
+            c.get("score_mean")
+            for c in countries.values()
+            if c.get("score_mean") is not None
+        ]
+        if vals:
+            plot_rows.append((name, color, vals))
+    if not plot_rows:
+        return
+
+    plot_names = [row[0] for row in plot_rows]
+    plot_colors = [row[1] for row in plot_rows]
+    datasets = [row[2] for row in plot_rows]
+    positions = np.arange(len(datasets))
+
+    fig, ax = plt.subplots(figsize=(max(10, len(datasets) * 1.8), 7))
+    parts = ax.violinplot(
+        datasets,
+        positions=positions,
+        widths=0.75,
+        showmeans=True,
+        showmedians=True,
+        showextrema=False,
+    )
+    for body, color in zip(parts["bodies"], plot_colors):
+        body.set_facecolor(color)
+        body.set_edgecolor(color)
+        body.set_alpha(0.35)
+    for key in ["cmeans", "cmedians"]:
+        if key in parts:
+            parts[key].set_color("black")
+            parts[key].set_linewidth(1.4 if key == "cmedians" else 1.0)
+
+    for i, vals in enumerate(datasets):
+        offsets = np.linspace(-0.08, 0.08, len(vals)) if len(vals) > 1 else np.array([0.0])
+        ax.scatter(
+            positions[i] + offsets,
+            vals,
+            s=22,
+            color=plot_colors[i],
+            edgecolor="black",
+            linewidth=0.4,
+            alpha=0.85,
+            zorder=3,
+        )
+
+    ax.axhline(y=0, color="gray", linestyle="-", linewidth=0.7)
+    ax.set_ylabel("Mean Cultural Score by Country")
+    ax.set_title("Distribution of Cultural Scores across Countries")
+    ax.set_xticks(positions)
+    ax.set_xticklabels(plot_names, rotation=25, ha="right", fontsize=9)
+    fig.tight_layout()
+    _save_fig(fig, os.path.join(shared_plots_dir, "cultural_country_score_violin.png"))
+
+
 
 def plot_cultural_arousal(all_results, shared_plots_dir):
     """Bar chart: mean score per arousal level, grouped by model."""
@@ -1186,6 +1252,7 @@ def generate_plots(all_results, model_parent_dir):
     has_cultural = any(r.get("cultural") for r in all_results)
     if has_cultural:
         plot_cultural_score_by_country(all_results, shared_plots_dir)
+        plot_cultural_country_score_violin(all_results, shared_plots_dir)
         plot_cultural_arousal(all_results, shared_plots_dir)
         plot_cultural_country_deviation_heatmap(all_results, shared_plots_dir)
         plot_cultural_arousal_correlation_lollipop(all_results, shared_plots_dir)
