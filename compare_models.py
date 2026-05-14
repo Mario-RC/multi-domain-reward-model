@@ -298,6 +298,59 @@ def print_global_score_table(all_results):
         print(row)
 
 
+def print_cultural_fairness_tables(all_results):
+    models = [r for r in all_results if r.get("cultural") and not r.get("_is_baseline")]
+    if not models:
+        return
+
+    names = [short_name(r["_name"]) for r in models]
+    col_width = max(15, max(len(n) for n in names))
+
+    print(f"\n{'=' * 90}")
+    print("  GLOBAL MEAN PREFERENCE SCORES (UNCALIBRATED LOGITS)")
+    print("  Stratified by Geopolitical Provenance. Stable scores across countries indicate geographic fairness.")
+    print("  Source: data/test/human_scores_multicultural.jsonl")
+    print(f"{'=' * 90}")
+
+    countries = sorted({
+        country
+        for r in models
+        for country in r.get("cultural", {}).get("countries", {}).keys()
+    })
+    if countries:
+        country_width = max(18, max(len(country) for country in countries))
+        print(f"\n  {'Country':<{country_width}} {'N':>5}" + "".join(f" {n:>{col_width}}" for n in names))
+        print(f"  {'-' * (country_width + 6 + (col_width + 1) * len(names))}")
+        for country in countries:
+            n = next((
+                r.get("cultural", {}).get("countries", {}).get(country, {}).get("n")
+                for r in models
+                if r.get("cultural", {}).get("countries", {}).get(country)
+            ), None)
+            row = f"  {country:<{country_width}} {n:>5}" if n is not None else f"  {country:<{country_width}} {'—':>5}"
+            for r in models:
+                val = r.get("cultural", {}).get("countries", {}).get(country, {}).get("score_mean")
+                row += f" {val:>{col_width}.4f}" if val is not None else f" {'—':>{col_width}}"
+            print(row)
+
+    print(f"\n{'=' * 90}")
+    print("  SCORE CORRELATION AGAINST EMOTIONAL AROUSAL (1-5 SCALE)")
+    print("  Note: An optimal, unbiased model yields a correlation approaching 0.0,")
+    print("        indicating complete independence from emotional intensity.")
+    print("  Source: data/test/human_scores_multicultural.jsonl")
+    print(f"{'=' * 90}")
+
+    print(f"\n  {'Model':<{col_width}} {'Pearson':>10} {'Spearman':>10}")
+    print(f"  {'-' * (col_width + 22)}")
+    for r, name in zip(models, names):
+        corr = r.get("cultural", {}).get("score_vs_arousal", {})
+        pearson = corr.get("pearson")
+        spearman = corr.get("spearman")
+        p = f"{pearson:>10.4f}" if pearson is not None else f"{'—':>10}"
+        s = f"{spearman:>10.4f}" if spearman is not None else f"{'—':>10}"
+        print(f"  {name:<{col_width}} {p} {s}")
+
+
 def print_markdown_summary(all_results):
     names = [short_name(r["_name"]) for r in all_results]
 
@@ -1137,6 +1190,9 @@ def main():
     if any("scoring" in r for r in all_results):
         print_scoring_table(all_results)
         print_global_score_table(all_results)
+
+    if any(r.get("cultural") and not r.get("_is_baseline") for r in all_results):
+        print_cultural_fairness_tables(all_results)
 
     print_markdown_summary(all_results)
 
