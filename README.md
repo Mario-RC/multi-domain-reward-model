@@ -85,8 +85,11 @@ This version uses **23 custom attributes** defined in `attributes.py` (single so
 
 ## Quickstart Execution Flow
 
+This environment requires **Python 3.12**. Create or activate a Python 3.12 virtual environment before installing the dependencies.
+
 ```bash
-pip install -r requirements.txt
+python -V
+python -m pip install -r requirements.txt
 ```
 
 > Recommended: install `flash-attn` to speed up attention.
