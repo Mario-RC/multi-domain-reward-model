@@ -725,6 +725,117 @@ def plot_cultural_arousal(all_results, shared_plots_dir):
     _save_fig(fig, os.path.join(shared_plots_dir, "cultural_score_by_arousal.png"))
 
 
+def plot_cultural_country_deviation_heatmap(all_results, shared_plots_dir):
+    """Heatmap: country score minus each model's mean score."""
+    models = [r for r in all_results if r.get("cultural") and not r.get("_is_baseline")]
+    if not models:
+        return
+
+    countries = sorted({
+        country
+        for r in models
+        for country in r.get("cultural", {}).get("countries", {}).keys()
+    })
+    if not countries:
+        return
+
+    names = [short_name(r["_name"]) for r in models]
+    data = []
+    for country in countries:
+        row = []
+        for r in models:
+            country_data = r.get("cultural", {}).get("countries", {})
+            model_scores = [
+                c.get("score_mean")
+                for c in country_data.values()
+                if c.get("score_mean") is not None
+            ]
+            country_score = country_data.get(country, {}).get("score_mean")
+            if not model_scores or country_score is None:
+                row.append(np.nan)
+            else:
+                row.append(country_score - float(np.mean(model_scores)))
+        data.append(row)
+    data = np.array(data, dtype=float)
+    if np.all(np.isnan(data)):
+        return
+
+    max_abs = float(np.nanmax(np.abs(data)))
+    if max_abs == 0:
+        max_abs = 1.0
+    cmap = BLUE_ORANGE_CMAP.copy()
+    cmap.set_bad(color="white")
+
+    fig, ax = plt.subplots(figsize=(max(10, len(names) * 2.0), max(6, len(countries) * 0.45)))
+    im = ax.imshow(np.ma.masked_invalid(data), aspect="auto", cmap=cmap, vmin=-max_abs, vmax=max_abs)
+    ax.set_xticks(np.arange(len(names)))
+    ax.set_xticklabels(names, rotation=25, ha="right", fontsize=9)
+    ax.set_yticks(np.arange(len(countries)))
+    ax.set_yticklabels(countries, fontsize=9)
+    ax.set_title("Geopolitical Score Deviation by Country")
+    cbar = fig.colorbar(im, ax=ax, shrink=0.85)
+    cbar.set_label("Country score - model mean")
+
+    for i in range(len(countries)):
+        for j in range(len(names)):
+            value = data[i, j]
+            if np.isnan(value):
+                continue
+            rgba = im.cmap(im.norm(value))
+            luminance = 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]
+            color = "white" if luminance < 0.45 else "black"
+            ax.text(j, i, f"{value:+.2f}", ha="center", va="center", fontsize=7, color=color)
+
+    fig.tight_layout()
+    _save_fig(fig, os.path.join(shared_plots_dir, "cultural_country_score_deviation_heatmap.png"))
+
+
+def plot_cultural_arousal_correlation_lollipop(all_results, shared_plots_dir):
+    """Lollipop plot: reward correlation against emotional arousal."""
+    models = [
+        r for r in all_results
+        if r.get("cultural", {}).get("score_vs_arousal") and not r.get("_is_baseline")
+    ]
+    if not models:
+        return
+
+    names = [short_name(r["_name"]) for r in models]
+    pearson = [r["cultural"]["score_vs_arousal"].get("pearson") for r in models]
+    spearman = [r["cultural"]["score_vs_arousal"].get("spearman") for r in models]
+    if all(v is None for v in pearson + spearman):
+        return
+
+    y = np.arange(len(models))
+    fig, ax = plt.subplots(figsize=(10, max(5, len(models) * 0.55)))
+    ax.axvspan(-0.05, 0.05, color="#E8ECF3", alpha=0.8, zorder=0)
+    ax.axvline(0, color="black", linewidth=1)
+
+    for values, offset, color, marker, label in [
+        (pearson, -0.12, "#0072B2", "o", "Pearson"),
+        (spearman, 0.12, "#E69F00", "s", "Spearman"),
+    ]:
+        for i, value in enumerate(values):
+            if value is None:
+                continue
+            ax.hlines(y[i] + offset, 0, value, color=color, linewidth=2, alpha=0.8)
+            ax.scatter(value, y[i] + offset, color=color, marker=marker, s=70, zorder=3,
+                       label=label if i == 0 else "")
+            ax.text(value, y[i] + offset, f" {value:+.3f}", va="center", fontsize=8,
+                    ha="left" if value >= 0 else "right")
+
+    max_abs = max(abs(v) for v in pearson + spearman if v is not None)
+    xlim = max(0.1, max_abs * 1.35)
+    ax.set_xlim(-xlim, xlim)
+    ax.set_yticks(y)
+    ax.set_yticklabels(names)
+    ax.invert_yaxis()
+    ax.set_xlabel("Correlation with emotional arousal")
+    ax.set_title("Score Correlation against Emotional Arousal")
+    ax.legend(loc="lower right")
+    fig.tight_layout()
+    _save_fig(fig, os.path.join(shared_plots_dir, "cultural_arousal_correlation_lollipop.png"))
+
+
 def plot_scoring_spearman_heatmap(all_results, shared_plots_dir):
     """Heatmap: Spearman per attribute × model. Skip models with no scoring attributes."""
     # Filter out models that have no scoring attribute data (e.g. qwen3 baseline)
@@ -1076,6 +1187,8 @@ def generate_plots(all_results, model_parent_dir):
     if has_cultural:
         plot_cultural_score_by_country(all_results, shared_plots_dir)
         plot_cultural_arousal(all_results, shared_plots_dir)
+        plot_cultural_country_deviation_heatmap(all_results, shared_plots_dir)
+        plot_cultural_arousal_correlation_lollipop(all_results, shared_plots_dir)
 
     # Per-model individual plots (baseline plots go in same dir with _baseline suffix).
     for r in all_results:
