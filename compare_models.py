@@ -652,13 +652,14 @@ def plot_cultural_arousal(all_results, shared_plots_dir):
         return
 
     names = [short_name(r["_name"]) for r in models]
+    colors = _result_colors(models)
     x = np.arange(len(arousal_levels))
     width = 0.8 / max(len(models), 1)
 
     fig, ax = plt.subplots(figsize=(10, 8))
     for i, r in enumerate(models):
         vals = [r["cultural"]["arousal"].get(a, {}).get("mean", 0) for a in arousal_levels]
-        ax.bar(x + i * width, vals, width, label=names[i], color=MODEL_COLORS[i % len(MODEL_COLORS)])
+        ax.bar(x + i * width, vals, width, label=names[i], color=colors[i])
 
     ax.set_ylabel("Mean Score")
     ax.set_xlabel("Arousal Level")
@@ -679,37 +680,95 @@ def plot_scoring_spearman_heatmap(all_results, shared_plots_dir):
     )]
     if not filtered:
         return
-    names = [short_name(r["_name"]) for r in filtered]
+    names = [axis_model_label(r["_name"]) for r in filtered]
     attrs_with_data = [a for a in ATTRIBUTES if any(
         r.get("scoring", {}).get("attributes", {}).get(a) for r in filtered
     )]
     if not attrs_with_data:
         return
 
+    display_attrs = _attributes_with_group_gaps(attrs_with_data)
     data = []
     for r in filtered:
         row = []
-        for a in attrs_with_data:
+        for a in display_attrs:
+            if a is None:
+                row.append(np.nan)
+                continue
             ad = r.get("scoring", {}).get("attributes", {}).get(a)
             row.append(ad["spearman"] if ad else 0)
         data.append(row)
-    data = np.array(data)
+    data = np.array(data, dtype=float)
 
+    cmap = BLUE_ORANGE_CMAP.copy()
+    cmap.set_bad(color="white")
+
+    gap_width = 0.28
+    x_edges = [0.0]
+    x_centers = []
+    group_ranges = []
+    current_group = None
+    group_start = None
+    last_attr_right = None
+    for a in display_attrs:
+        left = x_edges[-1]
+        width = gap_width if a is None else 1.0
+        right = left + width
+        x_edges.append(right)
+        x_centers.append((left + right) / 2)
+
+        if a is None:
+            continue
+
+        prefix = _attribute_prefix(a)
+        if prefix != current_group:
+            if current_group is not None:
+                group_ranges.append((group_start, last_attr_right))
+            current_group = prefix
+            group_start = left
+        last_attr_right = right
+    if current_group is not None:
+        group_ranges.append((group_start, last_attr_right))
+
+    y_edges = np.arange(len(names) + 1)
     fig, ax = plt.subplots(figsize=(max(12, len(attrs_with_data) * 0.6), max(4, len(names) * 0.8)))
-    im = ax.imshow(data, aspect="auto", cmap="RdYlGn", vmin=-0.1, vmax=0.9)
-    ax.set_xticks(range(len(attrs_with_data)))
-    ax.set_xticklabels(attrs_with_data, rotation=45, ha="right", fontsize=8)
-    ax.set_yticks(range(len(names)))
+    im = ax.pcolormesh(
+        x_edges,
+        y_edges,
+        np.ma.masked_invalid(data),
+        cmap=cmap,
+        vmin=-0.1,
+        vmax=0.9,
+        edgecolors="none",
+    )
+    ax.invert_yaxis()
+
+    tick_positions = [x_centers[i] for i, a in enumerate(display_attrs) if a is not None]
+    tick_labels = [a for a in display_attrs if a is not None]
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(np.arange(len(names)) + 0.5)
     ax.set_yticklabels(names, fontsize=10)
     ax.set_title("Scoring Spearman by Attribute (Heatmap)")
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    for start, end in group_ranges:
+        ax.add_patch(Rectangle((start, 0), end - start, len(names),
+                               fill=False, edgecolor="black", linewidth=1.2))
     cbar = fig.colorbar(im, ax=ax, shrink=0.8)
     cbar.set_label("Spearman Correlation")
     # Add text annotations
     for i in range(len(names)):
-        for j in range(len(attrs_with_data)):
+        for j, a in enumerate(display_attrs):
+            if a is None:
+                continue
             v = data[i, j]
-            color = "white" if v < 0.2 or v > 0.7 else "black"
-            ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7, color=color)
+            if np.isnan(v):
+                continue
+            rgba = im.cmap(im.norm(v))
+            luminance = 0.2126 * rgba[0] + 0.7152 * rgba[1] + 0.0722 * rgba[2]
+            color = "white" if luminance < 0.45 else "black"
+            ax.text(x_centers[j], i + 0.5, f"{v:.2f}", ha="center", va="center", fontsize=7, color=color)
     fig.tight_layout()
     _save_fig(fig, os.path.join(shared_plots_dir, "scoring_spearman_heatmap.png"))
 
