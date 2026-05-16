@@ -241,34 +241,12 @@ def print_preference_table(all_results):
     print(row)
 
 
-def print_scoring_table(all_results):
+def print_scoring_attributes_table(all_results):
     print(f"\n{'=' * 90}")
-    print("  SCORING EVALUATION COMPARISON (Spearman / Pearson / MSE)")
+    print("  SCORING ATTRIBUTES COMPARISON (Spearman)")
     print(f"{'=' * 90}")
 
     names = [short_name(r["_name"]) for r in all_results]
-
-    print(f"\n  {'Domain':<20}" + "".join(f" {n:>22}" for n in names))
-    print(f"  {'-' * (20 + 23 * len(names))}")
-
-    all_domains = set()
-    for r in all_results:
-        all_domains.update(r.get("scoring", {}).get("domains", {}).keys())
-    for domain in sorted(all_domains):
-        row = f"  {domain:<20}"
-        for r in all_results:
-            d = r.get("scoring", {}).get("domains", {}).get(domain)
-            row += f"  S={d['spearman']:.3f} P={d['pearson']:.3f}" if d else f" {'—':>22}"
-        print(row)
-
-    row = f"  {'AVERAGE':<20}"
-    for r in all_results:
-        avg = r.get("scoring", {}).get("average", {})
-        if avg and avg.get("spearman") is not None:
-            row += f"  S={avg['spearman']:.3f} P={avg['pearson']:.3f}"
-        else:
-            row += f" {'—':>22}"
-    print(row)
 
     print(f"\n  {'Attribute':<35}" + "".join(f" {n:>15}" for n in names) + "  (Spearman)")
     print(f"  {'-' * (35 + 16 * len(names))}")
@@ -278,6 +256,42 @@ def print_scoring_table(all_results):
             a = r.get("scoring", {}).get("attributes", {}).get(attr)
             row += f" {a['spearman']:>15.4f}" if a else f" {'—':>15}"
         print(row)
+
+
+def print_scoring_domain_table(all_results):
+    print(f"\n{'=' * 90}")
+    print("  SCORING DOMAIN COMPARISON (Spearman / Pearson / MSE)")
+    print(f"{'=' * 90}")
+
+    names = [short_name(r["_name"]) for r in all_results]
+    metric_col_width = 30
+
+    print(f"\n  {'Domain':<20}" + "".join(f" {n:>{metric_col_width}}" for n in names))
+    print(f"  {'-' * (20 + (metric_col_width + 1) * len(names))}")
+
+    all_domains = set()
+    for r in all_results:
+        all_domains.update(r.get("scoring", {}).get("domains", {}).keys())
+    for domain in sorted(all_domains):
+        row = f"  {domain:<20}"
+        for r in all_results:
+            d = r.get("scoring", {}).get("domains", {}).get(domain)
+            row += f"  S={d['spearman']:.3f} P={d['pearson']:.3f} M={d['mse']:.3f}" if d else f" {'—':>{metric_col_width}}"
+        print(row)
+
+    row = f"  {'AVERAGE':<20}"
+    for r in all_results:
+        avg = r.get("scoring", {}).get("average", {})
+        if avg and avg.get("spearman") is not None:
+            row += f"  S={avg['spearman']:.3f} P={avg['pearson']:.3f} M={avg['mse']:.3f}"
+        else:
+            row += f" {'—':>{metric_col_width}}"
+    print(row)
+
+
+def print_scoring_table(all_results):
+    print_scoring_attributes_table(all_results)
+    print_scoring_domain_table(all_results)
 
 
 def print_global_score_table(all_results):
@@ -358,45 +372,57 @@ def print_markdown_summary(all_results):
     print("  MARKDOWN SUMMARY (copy-paste ready)")
     print(f"{'=' * 90}\n")
 
-    print("### Preference Accuracy\n")
-    print("| Domain | " + " | ".join(names) + " |")
-    print("|" + "---|" * (len(names) + 1))
+    if any("scoring" in r for r in all_results):
+        print("### Scoring Attributes (Spearman)\n")
+        print("| Attribute | " + " | ".join(names) + " |")
+        print("|" + "---|" * (len(names) + 1))
+        for attr in ATTRIBUTES:
+            row = f"| {attr} |"
+            for r in all_results:
+                a = r.get("scoring", {}).get("attributes", {}).get(attr)
+                row += f" {a['spearman']:.4f} |" if a else " — |"
+            print(row)
 
-    row = "| **Overall** |"
-    for r in all_results:
-        acc = r.get("preference", {}).get("accuracy")
-        row += f" {acc:.2f}% |" if acc is not None else " — |"
-    print(row)
+        print("\n### Scoring Domain (Spearman)\n")
+        print("| Domain | " + " | ".join(names) + " |")
+        print("|" + "---|" * (len(names) + 1))
 
-    all_domains = set()
-    for r in all_results:
-        all_domains.update(r.get("preference", {}).get("domains", {}).keys())
-    for domain in sorted(all_domains):
-        row = f"| {domain} |"
+        all_domains = set()
         for r in all_results:
-            d = r.get("preference", {}).get("domains", {}).get(domain)
-            row += f" {d['accuracy']:.2f}% |" if d else " — |"
+            all_domains.update(r.get("scoring", {}).get("domains", {}).keys())
+        for domain in sorted(all_domains):
+            row = f"| {domain} |"
+            for r in all_results:
+                d = r.get("scoring", {}).get("domains", {}).get(domain)
+                row += f" {d['spearman']:.4f} |" if d else " — |"
+            print(row)
+
+        row = "| **Average** |"
+        for r in all_results:
+            avg = r.get("scoring", {}).get("average", {})
+            row += f" {avg['spearman']:.4f} |" if avg and avg.get("spearman") is not None else " — |"
         print(row)
 
-    print("\n### Scoring (Spearman)\n")
-    print("| Domain | " + " | ".join(names) + " |")
-    print("|" + "---|" * (len(names) + 1))
+    if any("preference" in r for r in all_results):
+        print("\n### Preference Accuracy\n")
+        print("| Domain | " + " | ".join(names) + " |")
+        print("|" + "---|" * (len(names) + 1))
 
-    all_domains = set()
-    for r in all_results:
-        all_domains.update(r.get("scoring", {}).get("domains", {}).keys())
-    for domain in sorted(all_domains):
-        row = f"| {domain} |"
+        row = "| **Overall** |"
         for r in all_results:
-            d = r.get("scoring", {}).get("domains", {}).get(domain)
-            row += f" {d['spearman']:.4f} |" if d else " — |"
+            acc = r.get("preference", {}).get("accuracy")
+            row += f" {acc:.2f}% |" if acc is not None else " — |"
         print(row)
 
-    row = "| **Average** |"
-    for r in all_results:
-        avg = r.get("scoring", {}).get("average", {})
-        row += f" {avg['spearman']:.4f} |" if avg and avg.get("spearman") is not None else " — |"
-    print(row)
+        all_domains = set()
+        for r in all_results:
+            all_domains.update(r.get("preference", {}).get("domains", {}).keys())
+        for domain in sorted(all_domains):
+            row = f"| {domain} |"
+            for r in all_results:
+                d = r.get("preference", {}).get("domains", {}).get(domain)
+                row += f" {d['accuracy']:.2f}% |" if d else " — |"
+            print(row)
 
 
 # ---------------------------------------------------------------------------
@@ -1364,11 +1390,14 @@ def main():
         sys.exit(1)
 
     # Print comparison tables
+    if any("scoring" in r for r in all_results):
+        print_scoring_attributes_table(all_results)
+        print_scoring_domain_table(all_results)
+
     if any("preference" in r for r in all_results):
         print_preference_table(all_results)
 
     if any("scoring" in r for r in all_results):
-        print_scoring_table(all_results)
         print_global_score_table(all_results)
 
     if any(r.get("cultural") and not r.get("_is_baseline") for r in all_results):
