@@ -365,66 +365,6 @@ def print_cultural_fairness_tables(all_results):
         print(f"  {name:<{col_width}} {p} {s}")
 
 
-def print_markdown_summary(all_results):
-    names = [short_name(r["_name"]) for r in all_results]
-
-    print(f"\n{'=' * 90}")
-    print("  MARKDOWN SUMMARY (copy-paste ready)")
-    print(f"{'=' * 90}\n")
-
-    if any("scoring" in r for r in all_results):
-        print("### Scoring Attributes (Spearman)\n")
-        print("| Attribute | " + " | ".join(names) + " |")
-        print("|" + "---|" * (len(names) + 1))
-        for attr in ATTRIBUTES:
-            row = f"| {attr} |"
-            for r in all_results:
-                a = r.get("scoring", {}).get("attributes", {}).get(attr)
-                row += f" {a['spearman']:.4f} |" if a else " — |"
-            print(row)
-
-        print("\n### Scoring Domain (Spearman)\n")
-        print("| Domain | " + " | ".join(names) + " |")
-        print("|" + "---|" * (len(names) + 1))
-
-        all_domains = set()
-        for r in all_results:
-            all_domains.update(r.get("scoring", {}).get("domains", {}).keys())
-        for domain in sorted(all_domains):
-            row = f"| {domain} |"
-            for r in all_results:
-                d = r.get("scoring", {}).get("domains", {}).get(domain)
-                row += f" {d['spearman']:.4f} |" if d else " — |"
-            print(row)
-
-        row = "| **Average** |"
-        for r in all_results:
-            avg = r.get("scoring", {}).get("average", {})
-            row += f" {avg['spearman']:.4f} |" if avg and avg.get("spearman") is not None else " — |"
-        print(row)
-
-    if any("preference" in r for r in all_results):
-        print("\n### Preference Accuracy\n")
-        print("| Domain | " + " | ".join(names) + " |")
-        print("|" + "---|" * (len(names) + 1))
-
-        row = "| **Overall** |"
-        for r in all_results:
-            acc = r.get("preference", {}).get("accuracy")
-            row += f" {acc:.2f}% |" if acc is not None else " — |"
-        print(row)
-
-        all_domains = set()
-        for r in all_results:
-            all_domains.update(r.get("preference", {}).get("domains", {}).keys())
-        for domain in sorted(all_domains):
-            row = f"| {domain} |"
-            for r in all_results:
-                d = r.get("preference", {}).get("domains", {}).get(domain)
-                row += f" {d['accuracy']:.2f}% |" if d else " — |"
-            print(row)
-
-
 # ---------------------------------------------------------------------------
 # Plot generation
 # ---------------------------------------------------------------------------
@@ -1402,8 +1342,6 @@ def main():
 
     if any(r.get("cultural") and not r.get("_is_baseline") for r in all_results):
         print_cultural_fairness_tables(all_results)
-
-    print_markdown_summary(all_results)
 
     # Export CSVs and generate plots
     output_dir = os.path.join(args.model_parent_dir, "compare_models")
