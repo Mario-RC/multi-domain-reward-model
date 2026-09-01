@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from glob import glob
 from tqdm import tqdm
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sklearn.linear_model import Ridge
 from sklearn.metrics import mean_squared_error
 from scipy.stats import pearsonr, spearmanr
@@ -37,6 +37,8 @@ parser.add_argument("--dataset_split", type=str, default="train", help="Split ta
 parser.add_argument("--embeddings_dir", type=str, default=None, help="Optional override for the embeddings root. Defaults to ./model/embeddings/.")
 parser.add_argument("--output_dir", type=str, default=None, help="Optional override for saving regression weights. Defaults to ./model/regression_weights/.")
 parser.add_argument("--model_family", type=str, default="llama3", help="Model family (llama3, gemma2, qwen3, mistral, auto).")
+parser.add_argument("--split_seed", type=int, default=42, help="Seed used for the Stage 1 train/validation split.")
+parser.add_argument("--val_size", type=float, default=0.2, help="Fraction reserved for Stage 1 validation.")
 args = parser.parse_args()
 
 config = load_yaml_config(args.config_path)
@@ -91,6 +93,8 @@ if not embedding_files:
 # ---------------------------
 embeddings_list = []
 labels_list = []
+group_ids_list = []
+all_shards_have_group_ids = True
 print(f"Loading embeddings and labels from {len(embedding_files)} Safetensors file(s)...")
 for file_path in tqdm(embedding_files, desc="Loading embedding shards"):
     try:
@@ -100,6 +104,10 @@ for file_path in tqdm(embedding_files, desc="Loading embedding shards"):
             continue
         embeddings_list.append(data["embeddings"])
         labels_list.append(data["labels"])
+        if "group_ids" in data:
+            group_ids_list.append(data["group_ids"])
+        else:
+            all_shards_have_group_ids = False
     except Exception as e:
         print(f"Warning: Failed to load file {file_path}: {e}. Skipping.")
         continue
@@ -112,6 +120,11 @@ if not embeddings_list or not labels_list:
 try:
     embeddings = torch.cat(embeddings_list, dim=0).float().numpy()
     labels = torch.cat(labels_list, dim=0).float().numpy()
+    group_ids = (
+        torch.cat(group_ids_list, dim=0).long().numpy()
+        if all_shards_have_group_ids and len(group_ids_list) == len(embeddings_list)
+        else None
+    )
 except Exception as e:
     print(f"FATAL ERROR: Failed to concatenate loaded tensors: {e}")
     traceback.print_exc()
@@ -135,16 +148,32 @@ if labels.shape[1] != len(attributes):
 # ---------------------------
 # Split data
 # ---------------------------
-print("Splitting data into training and validation sets (random_state=42)...")
+print(f"Splitting data into training and validation sets (seed={args.split_seed})...")
 try:
-    X_train, X_val, Y_train, Y_val = train_test_split(
-        embeddings, labels, test_size=0.2, random_state=42, shuffle=True
-    )
+    if group_ids is not None:
+        splitter = GroupShuffleSplit(
+            n_splits=1, test_size=args.val_size, random_state=args.split_seed,
+        )
+        train_idx, val_idx = next(
+            splitter.split(np.zeros(len(group_ids)), groups=group_ids)
+        )
+        overlap = set(group_ids[train_idx].tolist()) & set(group_ids[val_idx].tolist())
+        if overlap:
+            raise RuntimeError(f"Grouped Stage 1 split leaked {len(overlap)} group(s).")
+        X_train, X_val = embeddings[train_idx], embeddings[val_idx]
+        Y_train, Y_val = labels[train_idx], labels[val_idx]
+        split_mode = "prompt_grouped"
+    else:
+        X_train, X_val, Y_train, Y_val = train_test_split(
+            embeddings, labels, test_size=args.val_size,
+            random_state=args.split_seed, shuffle=True,
+        )
+        split_mode = "row_random_legacy"
     print(f"Training set size: {X_train.shape[0]}")
     print(f"Validation set size: {X_val.shape[0]}")
     X_full = np.concatenate([X_train, X_val], axis=0)
     Y_full = np.concatenate([Y_train, Y_val], axis=0)
-    del embeddings, labels
+    del embeddings, labels, group_ids
 except Exception as e:
     print(f"FATAL ERROR: Failed during train/validation split: {e}")
     traceback.print_exc()
