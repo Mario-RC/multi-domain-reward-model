@@ -84,6 +84,7 @@ stage_2_prepare:
   device: 0
   seq_len: 8192
   prompt_batch_size: 8
+  prompt_pooling: generation_boundary
 
 stage_2_train:
   model_path: sfairXC/FsfairX-LLaMA3-RM-v0.1

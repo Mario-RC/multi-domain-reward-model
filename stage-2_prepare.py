@@ -135,6 +135,12 @@ parser.add_argument("--output_dataset_name", type=str, default=None, help="Optio
 parser.add_argument("--dataset_path", type=str, default="data/dataset/Multi-Domain-Data-Preference-Pairs", help="Path to the dataset (HuggingFace path or local folder)")
 parser.add_argument("--source", default=None, type=str, help="Source filter for the dataset")
 parser.add_argument("--prompt_batch_size", type=int, default=8, help="Number of prompt-only conversations encoded per forward pass.")
+parser.add_argument(
+    "--prompt_pooling",
+    choices=["generation_boundary", "mean_prompt", "last_message_boundary"],
+    default="generation_boundary",
+    help="Pooling rule for the prompt-only gate representation.",
+)
 parser.add_argument("--dataset_split", type=str, default="train", help="Dataset split to use. Use 'all' to aggregate all available splits.")
 parser.add_argument("--n_shards", type=int, default=1, help="Total number of shards to divide the dataset into")
 parser.add_argument("--shard_idx", type=int, default=1, help="Index of the current shard")
@@ -344,8 +350,9 @@ if tokenizer.pad_token_id is None:
     tokenizer.pad_token = tokenizer.eos_token
 
 def _embed_prompt_batch(prompt_batch):
+    add_generation_prompt = args.prompt_pooling != "last_message_boundary"
     texts = tokenizer.apply_chat_template(
-        prompt_batch, tokenize=False, add_generation_prompt=True,
+        prompt_batch, tokenize=False, add_generation_prompt=add_generation_prompt,
     )
     if isinstance(texts, str):
         texts = [texts]
@@ -361,6 +368,14 @@ def _embed_prompt_batch(prompt_batch):
         output = model(**encoding)
         hidden = output.last_hidden_state
         mask = encoding.get("attention_mask")
+        if args.prompt_pooling == "mean_prompt":
+            if mask is None:
+                return hidden.mean(dim=1).cpu()
+            weights = mask.to(hidden.dtype).unsqueeze(-1)
+            return (
+                (hidden * weights).sum(dim=1)
+                / weights.sum(dim=1).clamp_min(1.0)
+            ).cpu()
         if mask is None:
             positions = torch.full(
                 (hidden.shape[0],), hidden.shape[1] - 1,
@@ -460,6 +475,15 @@ domains_tensor = torch.tensor(domains, dtype=torch.int8)
 group_ids_tensor = torch.tensor(group_ids, dtype=torch.int64)
 pair_ids_tensor = torch.tensor(pair_ids, dtype=torch.int64)
 format_version = torch.tensor([2], dtype=torch.int16)
+prompt_pooling_codes = {
+    "generation_boundary": 0,
+    "mean_prompt": 1,
+    "last_message_boundary": 2,
+}
+prompt_pooling_code = torch.tensor(
+    [prompt_pooling_codes[args.prompt_pooling]], dtype=torch.int16,
+)
+print(f"Prompt pooling: {args.prompt_pooling}")
 print(
     f"Prepared {len(embeddings)} pairs with shared prompt embeddings; skipped {skipped_pairs}."
 )
@@ -483,6 +507,7 @@ save_file(
         "group_ids": group_ids_tensor,
         "pair_ids": pair_ids_tensor,
         "format_version": format_version,
+        "prompt_pooling_code": prompt_pooling_code,
     },
     save_path_full,
 )
