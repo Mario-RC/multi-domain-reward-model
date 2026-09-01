@@ -312,7 +312,16 @@ save_path_weights_80pct = os.path.join(save_dir, f"{args.model_name}_{args.multi
 
 print(f"Saving 100% regression weights to {save_path_weights}")
 try:
-    torch.save({"weight": torch.from_numpy(weights_array)}, save_path_weights)
+    torch.save({
+        "weight": torch.from_numpy(weights_array),
+        "training_config": {
+            "split_mode": split_mode,
+            "split_seed": args.split_seed,
+            "val_size": args.val_size,
+            "multi_objective_dataset_name": args.multi_objective_dataset_name,
+            "dataset_split": args.dataset_split,
+        },
+    }, save_path_weights)
     print("100% regression weights saved successfully.")
 except Exception as e:
     print(f"FATAL ERROR: Failed to save weights file to {save_path_weights}: {e}")
@@ -321,7 +330,16 @@ except Exception as e:
 
 print(f"Saving 80% regression weights to {save_path_weights_80pct}")
 try:
-    torch.save({"weight": torch.from_numpy(weights_array_80pct)}, save_path_weights_80pct)
+    torch.save({
+        "weight": torch.from_numpy(weights_array_80pct),
+        "training_config": {
+            "split_mode": split_mode,
+            "split_seed": args.split_seed,
+            "val_size": args.val_size,
+            "multi_objective_dataset_name": args.multi_objective_dataset_name,
+            "dataset_split": args.dataset_split,
+        },
+    }, save_path_weights_80pct)
     print("80% regression weights saved successfully.")
 except Exception as e:
     print(f"Warning: Failed to save 80% weights file to {save_path_weights_80pct}: {e}")
