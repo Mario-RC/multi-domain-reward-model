@@ -18,7 +18,7 @@ from datetime import datetime
 from config_utils import load_yaml_config, apply_model_registry, apply_section_overrides
 from utils import (
     _attention_implementation, _build_save_paths, _resolve_local_dataset_file,
-    _load_tokenizer_robust, _requires_remote_code,
+    _load_tokenizer_robust, _requires_remote_code, _stable_int64_id,
 )
 
 # Enable TF32 for faster matmul on supported GPUs
@@ -55,7 +55,7 @@ def _keep_split(record: dict, target_split: str) -> bool:
 
 
 
-from attributes import ATTRIBUTES as attributes
+from attributes import ATTRIBUTES as attributes, DOMAIN_TO_INDEX
 print(f"Using {len(attributes)} custom attributes for regression.")
 
 # Parse CLI arguments
@@ -220,6 +220,8 @@ except Exception as e:
 # Extract embeddings and label vectors from each example
 embeddings = []
 labels = []
+domains = []
+group_ids = []
 skipped_formatting_tokenization = 0
 skipped_inference = 0
 skipped_label_extraction = 0
@@ -280,6 +282,8 @@ for example in tqdm(ds, desc=f"Shard {args.shard_idx}/{args.n_shards} Processing
         label_values = [scores_dict.get(attr, np.nan) for attr in attributes]
         label = [np.nan if x is None else float(x) for x in label_values]
         labels.append(label)
+        domains.append(DOMAIN_TO_INDEX.get(str(example.get("domain", "")).lower(), -1))
+        group_ids.append(_stable_int64_id(messages))
     except (TypeError, ValueError):
         if len(embeddings) > len(labels):
             embeddings.pop()
@@ -291,8 +295,11 @@ total_skipped = skipped_formatting_tokenization + skipped_inference + skipped_la
 if not embeddings or not labels:
     print(f"ERROR: No valid embeddings or labels extracted. Processed {len(ds)}, skipped {total_skipped}.")
     sys.exit(1)
-if len(embeddings) != len(labels):
-    print(f"FATAL ERROR: Mismatch between final embeddings ({len(embeddings)}) and labels ({len(labels)}). Logic error likely.")
+if not (len(embeddings) == len(labels) == len(domains) == len(group_ids)):
+    print("FATAL ERROR: Mismatch among embeddings, labels, domains, and group IDs.")
+    sys.exit(1)
+if any(domain < 0 for domain in domains):
+    print("FATAL ERROR: At least one scoring row has an unknown domain; refusing unsafe routing metadata.")
     sys.exit(1)
 
 print(f"Successfully processed {len(embeddings)} examples.")
@@ -304,6 +311,8 @@ print(f"Skipped during label extraction: {skipped_label_extraction}")
 try:
     labels_tensor = torch.tensor(labels, dtype=torch.float32)
     embeddings_tensor = torch.stack(embeddings, dim=0)
+    domains_tensor = torch.tensor(domains, dtype=torch.int16)
+    group_ids_tensor = torch.tensor(group_ids, dtype=torch.int64)
 except Exception as e:
     print(f"FATAL ERROR: Failed to convert extracted data lists to tensors: {e}")
     traceback.print_exc()
@@ -332,7 +341,13 @@ print(f"Ensured output directory exists: {final_dir}")
 
 print(f"Saving embeddings and labels to: {save_path_full}")
 try:
-    save_file({"embeddings": embeddings_tensor, "labels": labels_tensor}, save_path_full)
+    save_file({
+        "embeddings": embeddings_tensor,
+        "labels": labels_tensor,
+        "domains": domains_tensor,
+        "group_ids": group_ids_tensor,
+        "format_version": torch.tensor([2], dtype=torch.int16),
+    }, save_path_full)
     print(f"Successfully saved data for shard {args.shard_idx}/{args.n_shards}.")
 except Exception as e:
     print(f"FATAL ERROR: Failed to save safetensors file to {save_path_full}: {e}")
