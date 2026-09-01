@@ -314,13 +314,60 @@ if args.reuse_candidate_embeddings_path:
     reused_candidate_embeddings = reuse_payload.get("embeddings")
     if reused_candidate_embeddings is None:
         raise KeyError("Reuse file does not contain an 'embeddings' tensor.")
+    expected_reuse_rows = candidate_source_size if candidate_row_indices is not None else len(ds)
     reused_pair_ids = reuse_payload.get("pair_ids")
     if reused_pair_ids is None:
-        raise KeyError(
-            "Reuse file does not contain pair_ids; row alignment cannot be verified. "
-            "Regenerate it with the current stage-2_prepare.py."
+        legacy_keys = {"group_ids", "domains", "difficulties", "format_version"}
+        missing_legacy_keys = legacy_keys - set(reuse_payload)
+        if missing_legacy_keys:
+            raise KeyError(
+                "Reuse file has neither pair_ids nor the complete legacy V2 "
+                f"alignment metadata; missing {sorted(missing_legacy_keys)}."
+            )
+        if int(reuse_payload["format_version"].item()) != 2:
+            raise ValueError("Legacy reuse fallback requires format_version=2.")
+        reconstructed_pair_ids = torch.zeros(
+            expected_reuse_rows, dtype=torch.int64,
         )
-    expected_reuse_rows = candidate_source_size if candidate_row_indices is not None else len(ds)
+        difficulty_map = {"easy": 0, "medium": 1, "hard": 2}
+        for row_index, example in enumerate(ds):
+            prompt, full_chosen, full_rejected = _preference_messages(example)
+            reuse_index = (
+                candidate_row_indices[row_index]
+                if candidate_row_indices is not None else row_index
+            )
+            metadata = (
+                example.get("metadata")
+                if isinstance(example.get("metadata"), dict) else {}
+            )
+            domain_name = metadata.get("domain", example.get("domain"))
+            difficulty = metadata.get("difficulty", example.get("difficulty"))
+            expected_group = _stable_prompt_group_id(prompt)
+            expected_domain = DOMAIN_TO_INDEX.get(str(domain_name).lower(), -1)
+            expected_difficulty = difficulty_map.get(
+                str(difficulty).lower() if difficulty else "", 2,
+            )
+            actual = (
+                int(reuse_payload["group_ids"][reuse_index].item()),
+                int(reuse_payload["domains"][reuse_index].item()),
+                int(reuse_payload["difficulties"][reuse_index].item()),
+            )
+            expected = (
+                expected_group, expected_domain, expected_difficulty,
+            )
+            if actual != expected:
+                raise ValueError(
+                    f"Legacy V2 reuse metadata mismatch at source row "
+                    f"{reuse_index}: expected={expected}, actual={actual}."
+                )
+            reconstructed_pair_ids[reuse_index] = _stable_pair_id(
+                example, prompt, full_chosen, full_rejected,
+            )
+        reused_pair_ids = reconstructed_pair_ids
+        print(
+            "Verified legacy V2 candidate alignment using every row's prompt "
+            "group, domain, and difficulty; reconstructed pair_ids in memory."
+        )
     if len(reused_candidate_embeddings) != expected_reuse_rows:
         raise ValueError(
             f"Reuse tensor has {len(reused_candidate_embeddings)} rows; expected {expected_reuse_rows} before manifest selection."
