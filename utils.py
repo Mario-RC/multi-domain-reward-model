@@ -58,6 +58,30 @@ def validate_shared_routing_config(routing_config) -> dict:
     return routing_config
 
 
+def score_shared_gate_candidates(
+    candidate_attribute_rewards: torch.Tensor,
+    shared_gate_weights: torch.Tensor,
+) -> torch.Tensor:
+    """Combine per-candidate attribute rewards with one gate per prompt pair."""
+    if candidate_attribute_rewards.ndim != 3 or shared_gate_weights.ndim != 2:
+        raise ValueError(
+            "Shared-gate scoring expects candidate rewards shaped "
+            "[pairs, candidates, attributes] and gate weights shaped "
+            "[pairs, attributes]."
+        )
+    if (
+        candidate_attribute_rewards.shape[0] != shared_gate_weights.shape[0]
+        or candidate_attribute_rewards.shape[-1] != shared_gate_weights.shape[-1]
+    ):
+        raise ValueError(
+            "Candidate rewards and shared gate weights have incompatible "
+            "pair or attribute dimensions."
+        )
+    return torch.sum(
+        candidate_attribute_rewards * shared_gate_weights.unsqueeze(1), dim=-1
+    )
+
+
 def shared_gate_checkpoint_filename(args, model_name: str, preference_name: str, reference_name: str) -> str:
     """Build the canonical Shared-Gate V2 checkpoint filename."""
     from attributes import attribute_selection_suffix

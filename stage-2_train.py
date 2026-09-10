@@ -22,7 +22,7 @@ import traceback  # Used for detailed error traces
 from config_utils import load_yaml_config, apply_model_registry, apply_section_overrides
 
 from datetime import datetime
-from utils import shared_gate_checkpoint_filename
+from utils import score_shared_gate_candidates, shared_gate_checkpoint_filename
 
 # Enable TF32 for better throughput on Ampere+ GPUs.
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -1299,7 +1299,12 @@ def main():
 
                     with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
                         gating_weights_rb = model_eval(rb_prompt_batch)
-                        pred_rb = torch.sum((rb_embed_batch @ regression_layer.T @ reward_transform_matrix) * gating_weights_rb, dim=-1)
+                        attribute_rewards_rb = (
+                            rb_embed_batch @ regression_layer.T @ reward_transform_matrix
+                        )
+                        pred_rb = score_shared_gate_candidates(
+                            attribute_rewards_rb, gating_weights_rb
+                        )
 
                     correct_rb_batch = (pred_rb[:, 0] > pred_rb[:, 1]).float()
                     all_correct_flags_rb_list.append(correct_rb_batch.cpu())

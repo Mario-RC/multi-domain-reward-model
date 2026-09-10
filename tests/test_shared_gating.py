@@ -10,7 +10,7 @@ from config_utils import apply_model_registry, apply_section_overrides
 from utils import (
     _resolve_inference_model_path, _score_pair_shared_gate, _stable_int64_id,
     debiasing_checkpoint_suffix, shared_gate_checkpoint_filename,
-    validate_shared_routing_config,
+    score_shared_gate_candidates, validate_shared_routing_config,
 )
 
 
@@ -96,6 +96,27 @@ def test_pair_scoring_computes_one_gate_and_reuses_it_for_both_candidates():
     assert len(model.overrides) == 2
     assert model.overrides[0] is gate
     assert model.overrides[1] is gate
+
+
+def test_reward_bench_scoring_broadcasts_one_shared_gate_over_both_candidates():
+    candidate_rewards = torch.tensor([
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+        [[2.0, 1.0, 0.0], [0.0, 1.0, 2.0]],
+    ])
+    shared_gates = torch.tensor([[0.2, 0.3, 0.5], [0.5, 0.25, 0.25]])
+    actual = score_shared_gate_candidates(candidate_rewards, shared_gates)
+    expected = torch.einsum("bca,ba->bc", candidate_rewards, shared_gates)
+    torch.testing.assert_close(actual, expected)
+    assert actual.shape == (2, 2)
+
+
+def test_reward_bench_scoring_rejects_candidate_conditioned_gate_shape():
+    try:
+        score_shared_gate_candidates(torch.randn(2, 2, 3), torch.randn(2, 2, 3))
+    except ValueError as error:
+        assert "gate weights shaped [pairs, attributes]" in str(error)
+    else:
+        raise AssertionError("Candidate-conditioned RewardBench gates were accepted.")
 
 
 def test_domain_specific_subset_is_reversible_and_keeps_every_domain():
