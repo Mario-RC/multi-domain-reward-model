@@ -460,6 +460,20 @@ def main():
     parser.add_argument("--val_size", type=float, default=0.2, help="Fraction of prompt groups used for validation.")
     parser.add_argument("--train_on_all", action=BooleanOptionalAction, default=False, help="Refit selected hyperparameters on all available training groups for a fixed number of steps.")
     parser.add_argument(
+        "--training_row_indices_path", default=None,
+        help=(
+            "Optional JSON file containing sorted source-row indices. This is "
+            "restricted to all-data refits and avoids materializing duplicate embeddings."
+        ),
+    )
+    parser.add_argument(
+        "--exclude_training_domain", choices=list(DOMAIN_NAMES), default=None,
+        help=(
+            "Exclude one domain from an all-data refit without using it for "
+            "validation. Intended for full-refit LODO analysis."
+        ),
+    )
+    parser.add_argument(
         "--held_out_domain", choices=list(DOMAIN_NAMES), default=None,
         help="Exclude one domain from Stage 2 training and evaluate only on that domain.",
     )
@@ -519,6 +533,12 @@ def main():
         parser.error("--entropy_floor_fraction must be in [0, 1].")
     if args.held_out_domain and args.train_on_all:
         parser.error("--held_out_domain is incompatible with --train_on_all.")
+    if args.training_row_indices_path and not args.train_on_all:
+        parser.error("--training_row_indices_path requires --train_on_all.")
+    if args.exclude_training_domain and not args.train_on_all:
+        parser.error("--exclude_training_domain requires --train_on_all.")
+    if args.exclude_training_domain and args.held_out_domain:
+        parser.error("--exclude_training_domain and --held_out_domain are mutually exclusive.")
     if args.checkpoint_tag and not re.fullmatch(r"[A-Za-z0-9_-]+", args.checkpoint_tag):
         parser.error("--checkpoint_tag accepts only letters, digits, underscore, and hyphen.")
 
@@ -610,6 +630,36 @@ def main():
         embeddings_cpu, prompt_embeddings_cpu, difficulties_cpu, domains_cpu, group_ids_cpu = load_embeddings(
             preference_embedding_path_pattern, require_routing_metadata=True
         )
+
+        training_source_rows = len(embeddings_cpu)
+        training_selection_metadata = None
+        selected_indices = torch.arange(training_source_rows, dtype=torch.long)
+        if args.training_row_indices_path:
+            selected_indices, training_selection_metadata = load_training_row_indices(
+                args.training_row_indices_path, training_source_rows,
+            )
+        if args.exclude_training_domain:
+            held_out_index = DOMAIN_NAMES.index(args.exclude_training_domain)
+            selected_indices = selected_indices[
+                domains_cpu.index_select(0, selected_indices) != held_out_index
+            ]
+            if not len(selected_indices):
+                raise ValueError(
+                    f"Excluding {args.exclude_training_domain} removed every training row."
+                )
+        if len(selected_indices) != training_source_rows:
+            (
+                embeddings_cpu, prompt_embeddings_cpu, difficulties_cpu,
+                domains_cpu, group_ids_cpu,
+            ) = select_aligned_training_rows(
+                embeddings_cpu, prompt_embeddings_cpu, difficulties_cpu,
+                domains_cpu, group_ids_cpu, selected_indices,
+            )
+            print(
+                f"Selected {len(selected_indices)}/{training_source_rows} aligned "
+                "rows for this all-data refit."
+            )
+        training_selected_rows = len(embeddings_cpu)
 
         if args.max_samples is not None and args.max_samples < len(embeddings_cpu):
             print(f"NOTE: Subsetting preference data to first {args.max_samples} samples.")
@@ -1144,6 +1194,11 @@ def main():
         "balance_domains": args.balance_domains,
         "balance_difficulties": args.balance_difficulties,
         "held_out_domain": args.held_out_domain,
+        "exclude_training_domain": args.exclude_training_domain,
+        "training_row_indices_path": args.training_row_indices_path,
+        "training_selection_metadata": training_selection_metadata,
+        "training_source_rows": training_source_rows,
+        "training_selected_rows": training_selected_rows,
         "grouped_split": not args.train_on_all,
         "train_on_all": args.train_on_all,
         "metrics_scope": "training_refit" if args.train_on_all else "validation",
