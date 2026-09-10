@@ -995,7 +995,7 @@ def main():
         idx = torch.cat([p[torch.randint(len(p), (n,))] for p in active])
         return idx[torch.randperm(len(idx))[:args.batch_size]]
 
-    def _eval_validation():
+    def _eval_validation(capture_predictions=False):
         gating_network.eval()
         sums = {key: 0.0 for key in (
             "loss", "preference_loss", "domain_loss", "entropy_loss", "balance_loss",
@@ -1005,6 +1005,8 @@ def main():
         attr_mass = torch.zeros(n_attributes, dtype=torch.float64)
         matrix_ok = torch.zeros(len(DOMAIN_NAMES), 3, dtype=torch.long)
         matrix_n = torch.zeros_like(matrix_ok)
+        margin_batches = []
+        correct_batches = []
         with torch.no_grad():
             for i in range(0, len(X_val_cpu), args.batch_size * 4):
                 stop = i + args.batch_size * 4
@@ -1038,6 +1040,11 @@ def main():
                     identity = torch.sum(raw * broadcast_weights, -1)
                 batch_n = len(x)
                 ok = scores[:, 0] > scores[:, 1]
+                if capture_predictions:
+                    margin_batches.append(
+                        (scores[:, 0] - scores[:, 1]).float().cpu()
+                    )
+                    correct_batches.append(ok.cpu())
                 for key, value in (("loss", loss), ("preference_loss", pref), ("domain_loss", dl), ("entropy_loss", el), ("balance_loss", bl)):
                     sums[key] += value.item() * batch_n
                 sums["learned_correct"] += ok.sum().item()
@@ -1088,7 +1095,24 @@ def main():
         metrics["mean_top1_mass"] = metrics["routing_max"]
         metrics["max_global_attribute_mass"] = max(metrics["mean_attribute_mass"])
         gating_network.train()
-        return metrics
+        if not capture_predictions:
+            return metrics
+        predictions = {
+            "margin": torch.cat(margin_batches),
+            "correct": torch.cat(correct_batches),
+            "source_indices": (
+                torch.arange(len(Y_val_cpu), dtype=torch.int64)
+                if args.train_on_all else val_idx.clone().to(torch.int64)
+            ),
+            "group_ids": G_val_cpu.clone().to(torch.int64),
+            "domains": Y_val_cpu.clone().to(torch.int16),
+            "difficulties": (
+                D_val_cpu.clone().to(torch.int16)
+                if D_val_cpu is not None
+                else torch.full((len(Y_val_cpu),), -1, dtype=torch.int16)
+            ),
+        }
+        return metrics, predictions
 
     print(f"Training for {args.n_steps} steps (eval every {args.eval_every})...")
     iterator = tqdm(range(args.n_steps), desc="Training Progress")
@@ -1162,7 +1186,9 @@ def main():
         gating_network.load_state_dict(best_state_dict)
     if args.train_on_all:
         best_step = steps_completed
-    final_metrics = _eval_validation()
+    final_metrics, validation_predictions = _eval_validation(
+        capture_predictions=True,
+    )
     best_val_loss = final_metrics["loss"]
     best_val_acc = final_metrics["learned_correct"]
     elapsed_seconds = time.perf_counter() - training_started
@@ -1227,6 +1253,7 @@ def main():
         "reward_transform_matrix": reward_transform_matrix.cpu(),
         "training_config": training_config,
         "validation_metrics": final_metrics,
+        "validation_predictions": validation_predictions,
         "domain_names": list(DOMAIN_NAMES),
         "split": {
             "train_rows": len(train_idx), "validation_rows": len(val_idx),
