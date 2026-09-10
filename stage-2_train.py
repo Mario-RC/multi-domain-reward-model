@@ -483,7 +483,12 @@ def main():
     parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
     parser.add_argument("--checkpoint_tag", type=str, default=None, help="Optional safe tag appended to checkpoint names (letters, digits, underscore, hyphen).")
     parser.add_argument("--stage_1_weights_path", type=str, default=None, help="Optional override for Stage 1 regression weights path (default: auto-resolved _100pct.pt)")
-    parser.add_argument("--curriculum", action="store_true", default=False, help="Enable phased curriculum learning: easy → easy+medium → all")
+    parser.add_argument(
+        "--curriculum",
+        action=BooleanOptionalAction,
+        default=False,
+        help="Enable phased curriculum learning: easy → easy+medium → all",
+    )
     parser.add_argument("--curriculum_phase1_frac", type=float, default=0.20, help="Fraction of n_steps for easy-only phase (default: 0.20)")
     parser.add_argument("--curriculum_phase2_frac", type=float, default=0.50, help="Fraction of n_steps to end easy+medium phase (default: 0.50)")
     args = parser.parse_args()
