@@ -404,6 +404,10 @@ def main():
     parser.add_argument("--exclude_attributes", nargs="*", default=[], help="Additional exact attribute names to mask before gate softmax.")
     parser.add_argument("--val_size", type=float, default=0.2, help="Fraction of prompt groups used for validation.")
     parser.add_argument("--train_on_all", action=BooleanOptionalAction, default=False, help="Refit selected hyperparameters on all available training groups for a fixed number of steps.")
+    parser.add_argument(
+        "--held_out_domain", choices=list(DOMAIN_NAMES), default=None,
+        help="Exclude one domain from Stage 2 training and evaluate only on that domain.",
+    )
     parser.add_argument("--max_samples", type=int, default=None, help="Load only the first N samples from datasets (for debugging RAM issues)")
     parser.add_argument("--eval_every", type=int, default=200, help="Evaluate on validation set every N steps")
     parser.add_argument("--patience", type=int, default=15, help="Early stopping patience (number of evaluations without improvement)")
@@ -458,6 +462,8 @@ def main():
         parser.error("--debiasing_dims -1 cannot be combined with active dimensions.")
     if not 0 <= args.entropy_floor_fraction <= 1:
         parser.error("--entropy_floor_fraction must be in [0, 1].")
+    if args.held_out_domain and args.train_on_all:
+        parser.error("--held_out_domain is incompatible with --train_on_all.")
     if args.checkpoint_tag and not re.fullmatch(r"[A-Za-z0-9_-]+", args.checkpoint_tag):
         parser.error("--checkpoint_tag accepts only letters, digits, underscore, and hyphen.")
 
@@ -715,6 +721,26 @@ def main():
         G_train_cpu, G_val_cpu = G_cpu[train_idx], split_group_ids[val_idx]
         D_train_cpu = D_cpu[train_idx] if D_cpu is not None else None
         D_val_cpu = D_validation_source[val_idx] if D_validation_source is not None else None
+
+        if args.held_out_domain:
+            held_out_index = DOMAIN_NAMES.index(args.held_out_domain)
+            train_keep = Y_train_cpu != held_out_index
+            val_keep = Y_val_cpu == held_out_index
+            if not train_keep.any() or not val_keep.any():
+                raise RuntimeError(
+                    f"Leave-one-domain-out produced an empty split for {args.held_out_domain}."
+                )
+            train_idx = train_idx[train_keep]
+            val_idx = val_idx[val_keep]
+            X_train_cpu, Z_train_cpu = X_train_cpu[train_keep], Z_train_cpu[train_keep]
+            Y_train_cpu, G_train_cpu = Y_train_cpu[train_keep], G_train_cpu[train_keep]
+            X_val_cpu, Z_val_cpu = X_val_cpu[val_keep], Z_val_cpu[val_keep]
+            Y_val_cpu, G_val_cpu = Y_val_cpu[val_keep], G_val_cpu[val_keep]
+            if D_train_cpu is not None:
+                D_train_cpu = D_train_cpu[train_keep]
+            if D_val_cpu is not None:
+                D_val_cpu = D_val_cpu[val_keep]
+            validation_mode += f"_held_out_{args.held_out_domain}"
         print(
             f"Train={len(train_idx)}, validation={len(val_idx)}, prompt-group overlap=0, "
             f"validation_mode={validation_mode}"
@@ -765,6 +791,8 @@ def main():
 
     print(f"Batch size: {args.batch_size}")
     print(f"Gate input mode: {args.gate_input_mode}")
+    if args.held_out_domain:
+        print(f"Held-out Stage 2 domain: {args.held_out_domain}")
     input_dim = X_train_cpu.shape[-1]
     if args.gate_input_mode == "global":
         gating_network = GlobalGatingNetwork(
@@ -1060,6 +1088,7 @@ def main():
         "excluded_attribute_names": list(excluded_attribute_names),
         "balance_domains": args.balance_domains,
         "balance_difficulties": args.balance_difficulties,
+        "held_out_domain": args.held_out_domain,
         "grouped_split": not args.train_on_all,
         "train_on_all": args.train_on_all,
         "metrics_scope": "training_refit" if args.train_on_all else "validation",

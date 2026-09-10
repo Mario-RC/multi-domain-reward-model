@@ -117,6 +117,7 @@ stage_2_train:
   eval_every: 200
   patience: 15
   train_on_all: false
+  held_out_domain: null
   curriculum: false
   curriculum_phase1_frac: 0.20
   curriculum_phase2_frac: 0.50
