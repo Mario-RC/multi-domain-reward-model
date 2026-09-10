@@ -5,6 +5,7 @@ import re
 import sys
 import time
 import tempfile
+import json
 import torch
 import numpy as np
 from safetensors.torch import load_file
@@ -351,6 +352,60 @@ def load_embeddings(embedding_path_pattern, require_routing_metadata=False):
         )
     print(f"Successfully loaded a total of {len(embeddings_cpu)} embedding pairs into CPU RAM.")
     return embeddings_cpu, prompt_embeddings_cpu, difficulties_cpu, domains_cpu, group_ids_cpu
+
+
+def load_training_row_indices(path, source_rows):
+    """Load and validate an explicit, alignment-sensitive training-row subset."""
+    with open(path, "r", encoding="utf-8") as stream:
+        payload = json.load(stream)
+    values = payload.get("indices")
+    if not isinstance(values, list) or not values:
+        raise ValueError("Training-row index file must contain a non-empty 'indices' list.")
+    if payload.get("source_rows") not in (None, source_rows):
+        raise ValueError(
+            f"Training-row index source_rows={payload.get('source_rows')} does not "
+            f"match loaded rows={source_rows}."
+        )
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+        raise ValueError("Training-row indices must all be integers.")
+    if len(values) != len(set(values)):
+        raise ValueError("Training-row index file contains duplicate indices.")
+    if min(values) < 0 or max(values) >= source_rows:
+        raise ValueError(
+            f"Training-row indices must lie in [0, {source_rows}); "
+            f"received range [{min(values)}, {max(values)}]."
+        )
+    indices = torch.tensor(values, dtype=torch.long)
+    if not torch.equal(indices, torch.sort(indices).values):
+        raise ValueError("Training-row indices must be sorted to preserve source alignment.")
+    return indices, payload
+
+
+def select_aligned_training_rows(
+    embeddings, prompt_embeddings, difficulties, domains, group_ids, indices,
+):
+    """Apply one verified index tensor to every row-aligned training tensor."""
+    source_rows = len(embeddings)
+    aligned = {
+        "prompt_embeddings": prompt_embeddings,
+        "domains": domains,
+        "group_ids": group_ids,
+    }
+    if difficulties is not None:
+        aligned["difficulties"] = difficulties
+    for name, tensor in aligned.items():
+        if len(tensor) != source_rows:
+            raise ValueError(
+                f"Cannot select training rows: {name} has {len(tensor)} rows, "
+                f"expected {source_rows}."
+            )
+    return (
+        embeddings.index_select(0, indices),
+        prompt_embeddings.index_select(0, indices),
+        difficulties.index_select(0, indices) if difficulties is not None else None,
+        domains.index_select(0, indices),
+        group_ids.index_select(0, indices),
+    )
 
 
 # ----------------------------
