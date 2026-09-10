@@ -204,6 +204,24 @@ def test_checkpoint_name_encodes_debiasing_and_refit_without_collisions():
     assert debiasing_checkpoint_suffix([20, 18, 20], 0.04) == "_db18-20_ct0p04"
 
 
+def test_long_checkpoint_names_are_shortened_deterministically():
+    args = _checkpoint_args(
+        checkpoint_tag="extended_" + "x" * 160,
+        gate_input_mode="shuffled_prompt",
+    )
+    first = shared_gate_checkpoint_filename(
+        args, "FsfairX-LLaMA3-RM-v0.1",
+        "Multi-Domain-Data-Preference-Pairs-SharedGate", "null",
+    )
+    second = shared_gate_checkpoint_filename(
+        args, "FsfairX-LLaMA3-RM-v0.1",
+        "Multi-Domain-Data-Preference-Pairs-SharedGate", "null",
+    )
+    assert first == second
+    assert len(first.encode("utf-8")) <= 240
+    assert first.endswith(".pt")
+
+
 def test_shared_routing_config_rejects_legacy_checkpoints():
     valid = {"format_version": 2, "shared_prompt_gating": True}
     assert validate_shared_routing_config(valid) is valid

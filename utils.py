@@ -106,13 +106,25 @@ def shared_gate_checkpoint_filename(args, model_name: str, preference_name: str,
     checkpoint_tag = getattr(args, "checkpoint_tag", None)
     suffix += f"_tag-{checkpoint_tag}" if checkpoint_tag else ""
     suffix += "_refit" if getattr(args, "train_on_all", False) else ""
-    return (
+    filename = (
         f"gating_network_sgv2_{model_name}_mo_{args.multi_objective_dataset_name}_"
         f"pref_{preference_name}_ref_{reference_name}"
         f"_t{getattr(args, 'temperature', 2.0):.1f}"
         f"_n{getattr(args, 'n_steps', 30000)}"
         f"_seed{getattr(args, 'seed', 0)}{hyperparameters}{suffix}.pt"
     )
+    # Linux filesystems normally limit a single path component to 255 bytes.
+    # Keep short legacy names unchanged, but make long ablation names portable
+    # and collision resistant for both Stage 2 saving and Stage 3 lookup.
+    max_filename_bytes = 240
+    if len(filename.encode("utf-8")) > max_filename_bytes:
+        import hashlib
+
+        digest = hashlib.sha256(filename.encode("utf-8")).hexdigest()[:16]
+        extension = ".pt"
+        budget = max_filename_bytes - len(f"_h{digest}{extension}")
+        filename = f"{filename[:-len(extension)][:budget]}_h{digest}{extension}"
+    return filename
 
 
 
