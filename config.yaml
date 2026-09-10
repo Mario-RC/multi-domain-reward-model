@@ -105,6 +105,7 @@ stage_2_train:
   corr_threshold: 0.04
   logit_scale: 2.0
   learnable_logit_scale: false
+  gate_input_mode: prompt
   domain_loss_weight: 0.25
   entropy_weight: 0.02
   entropy_floor_fraction: 0.35

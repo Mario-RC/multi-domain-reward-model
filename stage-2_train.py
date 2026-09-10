@@ -102,6 +102,44 @@ class GatingNetwork(nn.Module):
         x = F.softmax(logits, dim=-1)
         return x * self.logit_scale  # Learnable global output scaling.
 
+
+class GlobalGatingNetwork(nn.Module):
+    """Learn one prompt-independent objective mixture as a causal control."""
+
+    def __init__(
+        self,
+        out_features: int,
+        temperature: float = 10,
+        logit_scale: float = 1.0,
+        learnable_logit_scale: bool = False,
+        active_attribute_indices=None,
+    ):
+        super().__init__()
+        if temperature <= 0:
+            raise ValueError("Temperature must be positive.")
+        self.temperature = temperature
+        self.logits = nn.Parameter(torch.zeros(out_features))
+        self.logit_scale = nn.Parameter(
+            torch.ones(1) * logit_scale,
+            requires_grad=learnable_logit_scale,
+        )
+        active_mask = torch.ones(out_features, dtype=torch.bool)
+        if active_attribute_indices is not None:
+            if not active_attribute_indices:
+                raise ValueError("At least one attribute must be active.")
+            active_mask.zero_()
+            active_mask[list(active_attribute_indices)] = True
+        self.register_buffer("active_attribute_mask", active_mask, persistent=False)
+
+    def forward(self, x: torch.FloatTensor) -> torch.FloatTensor:
+        logits = self.logits / self.temperature
+        logits = logits.masked_fill(
+            ~self.active_attribute_mask.to(device=logits.device),
+            torch.finfo(logits.dtype).min,
+        )
+        weights = F.softmax(logits, dim=-1) * self.logit_scale
+        return weights.expand(*x.shape[:-1], -1)
+
 # ----------------------------
 # UTILITY FUNCTIONS
 # ----------------------------
@@ -347,6 +385,15 @@ def main():
     parser.add_argument("--hidden_size", type=int, default=64, help="Dimension of hidden layers in the gating network")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout probability in the gating network's hidden layers")
     parser.add_argument("--learnable_logit_scale", action=BooleanOptionalAction, default=False, help="Allow the global gate scale to train (off by default).")
+    parser.add_argument(
+        "--gate_input_mode",
+        choices=["prompt", "global", "shuffled_prompt", "candidate_conditioned"],
+        default="prompt",
+        help=(
+            "Representation used by the gate. Non-prompt modes are controlled "
+            "ablations and must not be packaged as primary shared-gate models."
+        ),
+    )
     parser.add_argument("--domain_loss_weight", type=float, default=0.25, help="Weight of supervised domain-mass routing loss.")
     parser.add_argument("--entropy_weight", type=float, default=0.02, help="Weight of per-example anti-collapse entropy loss.")
     parser.add_argument("--entropy_floor_fraction", type=float, default=0.35, help="Minimum gate entropy as a fraction of log(active attributes).")
@@ -634,6 +681,7 @@ def main():
         Z_train_cpu, Z_val_cpu = Z_cpu, Z_cpu
         Y_train_cpu, Y_val_cpu = Y_cpu, Y_cpu
         D_train_cpu, D_val_cpu = D_cpu, D_cpu
+        G_train_cpu, G_val_cpu = G_cpu, G_cpu
         validation_source_rows = 0
         validation_group_count = 0
         print(f"Refit mode: training on all {len(train_idx)} rows; no validation selection or early stopping.")
@@ -664,6 +712,7 @@ def main():
         X_train_cpu, X_val_cpu = X_cpu[train_idx], X_validation_source[val_idx]
         Z_train_cpu, Z_val_cpu = Z_cpu[train_idx], Z_validation_source[val_idx]
         Y_train_cpu, Y_val_cpu = Y_cpu[train_idx], Y_validation_source[val_idx]
+        G_train_cpu, G_val_cpu = G_cpu[train_idx], split_group_ids[val_idx]
         D_train_cpu = D_cpu[train_idx] if D_cpu is not None else None
         D_val_cpu = D_validation_source[val_idx] if D_validation_source is not None else None
         print(
@@ -715,14 +764,23 @@ def main():
     torch.cuda.empty_cache()
 
     print(f"Batch size: {args.batch_size}")
+    print(f"Gate input mode: {args.gate_input_mode}")
     input_dim = X_train_cpu.shape[-1]
-    gating_network = GatingNetwork(
-        X_train_cpu.shape[-1], n_attributes, n_hidden=args.n_hidden,
-        hidden_dim=args.hidden_size, logit_scale=args.logit_scale,
-        temperature=args.temperature, dropout=args.dropout,
-        learnable_logit_scale=args.learnable_logit_scale,
-        active_attribute_indices=active_attribute_indices,
-    ).to(device)
+    if args.gate_input_mode == "global":
+        gating_network = GlobalGatingNetwork(
+            n_attributes, logit_scale=args.logit_scale,
+            temperature=args.temperature,
+            learnable_logit_scale=args.learnable_logit_scale,
+            active_attribute_indices=active_attribute_indices,
+        ).to(device)
+    else:
+        gating_network = GatingNetwork(
+            X_train_cpu.shape[-1], n_attributes, n_hidden=args.n_hidden,
+            hidden_dim=args.hidden_size, logit_scale=args.logit_scale,
+            temperature=args.temperature, dropout=args.dropout,
+            learnable_logit_scale=args.learnable_logit_scale,
+            active_attribute_indices=active_attribute_indices,
+        ).to(device)
     loss_fn = torch.nn.BCEWithLogitsLoss()
     optimizer = torch.optim.AdamW(gating_network.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     first_phase = max(curriculum_phase1_end, 1) if args.curriculum else max(args.n_steps, 1)
@@ -740,6 +798,44 @@ def main():
     active_count = len(active_attribute_indices)
     log_k = float(np.log(active_count))
     entropy_floor = args.entropy_floor_fraction * log_k
+
+    def _mismatched_prompt_indices(group_ids, seed):
+        """Map every row to a deterministic prompt from a different group."""
+        unique_groups, inverse = torch.unique(
+            group_ids, sorted=True, return_inverse=True,
+        )
+        if len(unique_groups) < 2:
+            raise RuntimeError("Shuffled-prompt ablation requires at least two prompt groups.")
+        generator = torch.Generator().manual_seed(seed)
+        group_order = torch.randperm(len(unique_groups), generator=generator)
+        target_group = torch.empty_like(group_order)
+        target_group[group_order] = torch.roll(group_order, shifts=-1)
+        counts = torch.bincount(inverse, minlength=len(unique_groups))
+        sorted_rows = torch.argsort(inverse, stable=True)
+        starts = torch.cat([
+            torch.zeros(1, dtype=torch.long),
+            torch.cumsum(counts, dim=0)[:-1],
+        ])
+        first_row_by_group = sorted_rows[starts]
+        result = first_row_by_group[target_group[inverse]]
+        if torch.any(group_ids[result] == group_ids):
+            raise RuntimeError("Failed to construct a mismatched-prompt control.")
+        return result
+
+    train_gate_indices = val_gate_indices = None
+    if args.gate_input_mode == "shuffled_prompt":
+        train_gate_indices = _mismatched_prompt_indices(G_train_cpu, args.seed + 104729)
+        val_gate_indices = _mismatched_prompt_indices(G_val_cpu, args.seed + 130363)
+
+    def _gate_weights(x, z):
+        """Return score weights and one routing distribution per preference pair."""
+        if args.gate_input_mode == "candidate_conditioned":
+            score_weights = gating_network(z)
+            routing_weights = score_weights.mean(dim=1)
+        else:
+            score_weights = gating_network(x)
+            routing_weights = score_weights
+        return score_weights, routing_weights
 
     def _routing_losses(probs, labels):
         masses = torch.stack([probs.index_select(-1, ix).sum(-1) for ix in domain_indices], -1)
@@ -774,26 +870,34 @@ def main():
         with torch.no_grad():
             for i in range(0, len(X_val_cpu), args.batch_size * 4):
                 stop = i + args.batch_size * 4
-                x = X_val_cpu[i:stop].to(device)
+                gate_rows = (
+                    val_gate_indices[i:stop] if val_gate_indices is not None
+                    else slice(i, stop)
+                )
+                x = X_val_cpu[gate_rows].to(device)
                 z = Z_val_cpu[i:stop].to(device)
                 labels = Y_val_cpu[i:stop].to(device)
                 with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
-                    weights = gating_network(x)
-                    probs = weights / gating_network.logit_scale.clamp_min(1e-8)
+                    score_weights, routing_weights = _gate_weights(x, z)
+                    probs = routing_weights / gating_network.logit_scale.clamp_min(1e-8)
                     raw = z @ regression_layer.T
                     rewards = raw @ reward_transform_matrix
-                    scores = torch.sum(rewards * weights[:, None, :], -1)
+                    broadcast_weights = (
+                        score_weights if score_weights.ndim == 3
+                        else score_weights[:, None, :]
+                    )
+                    scores = torch.sum(rewards * broadcast_weights, -1)
                     pref = loss_fn(scores[:, 0] - scores[:, 1], torch.ones(len(x), device=device))
                     dl, el, bl, masses, entropy = _routing_losses(probs, labels)
                     loss = pref + args.domain_loss_weight * dl + args.entropy_weight * el + args.load_balance_weight * bl
                     uniform = rewards.index_select(-1, active_index_tensor).sum(-1) * (args.logit_scale / active_count)
-                    oracle_w = torch.zeros_like(weights)
+                    oracle_w = torch.zeros_like(routing_weights)
                     for d, ix in enumerate(domain_indices):
                         rows = torch.where(labels == d)[0]
                         if len(rows):
                             oracle_w[rows[:, None], ix[None, :]] = args.logit_scale / len(ix)
                     oracle = torch.sum(rewards * oracle_w[:, None, :], -1)
-                    identity = torch.sum(raw * weights[:, None, :], -1)
+                    identity = torch.sum(raw * broadcast_weights, -1)
                 batch_n = len(x)
                 ok = scores[:, 0] > scores[:, 1]
                 for key, value in (("loss", loss), ("preference_loss", pref), ("domain_loss", dl), ("entropy_loss", el), ("balance_loss", bl)):
@@ -866,13 +970,21 @@ def main():
                 group["lr"] = args.learning_rate
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(end - step, 1))
             evals_without_improvement = 0
-        x, z = X_train_cpu[idx].to(device), Z_train_cpu[idx].to(device)
+        gate_idx = train_gate_indices[idx] if train_gate_indices is not None else idx
+        x, z = X_train_cpu[gate_idx].to(device), Z_train_cpu[idx].to(device)
         labels = Y_train_cpu[idx].to(device)
         try:
             with torch.amp.autocast(device_type=device.type, dtype=amp_dtype):
-                weights = gating_network(x)
-                probs = weights / gating_network.logit_scale.clamp_min(1e-8)
-                scores = torch.sum((z @ regression_layer.T @ reward_transform_matrix) * weights[:, None, :], -1)
+                score_weights, routing_weights = _gate_weights(x, z)
+                probs = routing_weights / gating_network.logit_scale.clamp_min(1e-8)
+                broadcast_weights = (
+                    score_weights if score_weights.ndim == 3
+                    else score_weights[:, None, :]
+                )
+                scores = torch.sum(
+                    (z @ regression_layer.T @ reward_transform_matrix) * broadcast_weights,
+                    -1,
+                )
                 pref = loss_fn(scores[:, 0] - scores[:, 1], torch.ones_like(scores[:, 0]))
                 dl, el, bl, _, _ = _routing_losses(probs, labels)
                 loss = pref + args.domain_loss_weight * dl + args.entropy_weight * el + args.load_balance_weight * bl
@@ -928,7 +1040,9 @@ def main():
     )
     save_path = os.path.join(save_dir, unique_filename)
     training_config = {
-        "format_version": 2, "shared_prompt_gating": True,
+        "format_version": 2,
+        "shared_prompt_gating": args.gate_input_mode == "prompt",
+        "gate_input_mode": args.gate_input_mode,
         "in_features": input_dim, "out_features": n_attributes,
         "n_hidden": args.n_hidden, "hidden_size": args.hidden_size,
         "dropout": args.dropout, "temperature": args.temperature,
