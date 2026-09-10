@@ -434,6 +434,10 @@ def main():
     parser.add_argument("--model_family", type=str, default="llama3", choices=["llama3", "gemma2", "qwen3", "mistral", "auto"], help="Model family for token pattern matching during embedding extraction (if applicable, less relevant here)")
     parser.add_argument("--eval", type=str, default=None, help="Eval dataset name (e.g. reward-bench). Requires embeddings from stage-2_prepare.")
     parser.add_argument("--eval_split", type=str, default="filtered", help="Split suffix for the eval dataset (default: filtered).")
+    parser.add_argument(
+        "--require_eval_success", action="store_true", default=False,
+        help="Fail if --eval does not produce a verifiable prediction vector.",
+    )
     parser.add_argument("--logit_scale", type=float, default=2.0, help="Scaling factor applied after softmax in the gating network")
     parser.add_argument("--temperature", type=float, default=2.0, help="Temperature for softmax scaling in the gating network")
     parser.add_argument("--n_hidden", type=int, default=1, help="Number of hidden layers in the gating network MLP")
@@ -1247,6 +1251,8 @@ def main():
         "validation_preference_dataset_name": validation_pref_base or pref_base,
         "validation_mode": validation_mode,
         "reference_dataset_name": ref_base,
+        "eval_dataset_name": args.eval,
+        "eval_split": args.eval_split if args.eval else None,
         "elapsed_seconds": elapsed_seconds,
         "checkpoint_tag": args.checkpoint_tag,
         "gating_parameter_count": sum(parameter.numel() for parameter in gating_network.parameters()),
@@ -1278,6 +1284,7 @@ def main():
     print(f"Saved gating network state dict to {save_path}")
 
     # --- Optional eval dataset evaluation ---
+    external_evaluation = None
     if args.eval and eval_embedding_path_pattern:
         print(f"Evaluating on {args.eval}...")
         all_correct_flags_rb_list = []
@@ -1311,6 +1318,16 @@ def main():
 
             if all_correct_flags_rb_list:
                 all_correct_flags_rb = torch.cat(all_correct_flags_rb_list, dim=0)
+                external_evaluation = {
+                    "dataset": args.eval,
+                    "split": args.eval_split,
+                    "rows": len(all_correct_flags_rb),
+                    "preference_accuracy": float(
+                        all_correct_flags_rb.float().mean().item()
+                    ),
+                    "correct": all_correct_flags_rb.to(torch.bool),
+                    "status": "predictions_complete",
+                }
                 try:
                     reward_bench_ds = datasets.load_dataset(f"allenai/{args.eval}", split=args.eval_split)
                     if len(reward_bench_ds) == len(all_correct_flags_rb):
@@ -1318,12 +1335,39 @@ def main():
                         scores_per_section, metrics = eval_reward_bench(df_examples_rb)
                         print("RewardBench Scores:")
                         print(pd.DataFrame([scores_per_section]))
+                        external_evaluation["section_scores"] = {
+                            str(key): float(value)
+                            for key, value in scores_per_section.items()
+                        }
+                        external_evaluation["status"] = "complete"
                     else:
                         print(f"Warning: Mismatch RewardBench dataset size ({len(reward_bench_ds)}) vs predictions ({len(all_correct_flags_rb)}). Skipping score calculation.")
                 except Exception as e:
                     print(f"Error loading or processing RewardBench dataset for evaluation: {e}")
             else:
                 print("Warning: No RewardBench predictions were generated.")
+    if args.eval:
+        if external_evaluation is None and args.require_eval_success:
+            raise RuntimeError(
+                f"Required external evaluation {args.eval}/{args.eval_split} "
+                "did not produce predictions."
+            )
+        if external_evaluation is not None:
+            checkpoint_payload["external_evaluation"] = external_evaluation
+            temporary_fd, temporary_save_path = tempfile.mkstemp(
+                prefix=".checkpoint-", suffix=".incomplete", dir=save_dir,
+            )
+            os.close(temporary_fd)
+            try:
+                torch.save(checkpoint_payload, temporary_save_path)
+                os.replace(temporary_save_path, save_path)
+            finally:
+                if os.path.exists(temporary_save_path):
+                    os.unlink(temporary_save_path)
+            print(
+                "Updated checkpoint with external evaluation: "
+                f"{external_evaluation['preference_accuracy']:.4f}"
+            )
 
 
 if __name__ == '__main__':
