@@ -89,6 +89,20 @@ def shared_gate_checkpoint_filename(args, model_name: str, preference_name: str,
         getattr(args, "attribute_subset", "full"),
         getattr(args, "exclude_attributes", []),
     )
+    gate_input_mode = getattr(args, "gate_input_mode", "prompt")
+    gate_mode_codes = {
+        "prompt": "prompt",
+        "global": "global",
+        "shuffled_prompt": "shuffle",
+        "candidate_conditioned": "candidate",
+    }
+    if gate_input_mode not in gate_mode_codes:
+        raise ValueError(f"Unknown gate_input_mode: {gate_input_mode}")
+    if gate_input_mode != "prompt":
+        suffix += f"_gim-{gate_mode_codes[gate_input_mode]}"
+    held_out_domain = getattr(args, "held_out_domain", None)
+    if held_out_domain:
+        suffix += f"_holdout-{held_out_domain}"
     checkpoint_tag = getattr(args, "checkpoint_tag", None)
     suffix += f"_tag-{checkpoint_tag}" if checkpoint_tag else ""
     suffix += "_refit" if getattr(args, "train_on_all", False) else ""
