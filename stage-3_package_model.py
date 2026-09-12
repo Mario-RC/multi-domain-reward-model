@@ -5,6 +5,7 @@ import hashlib
 import os
 import shutil
 import sys
+import time
 import torch
 from argparse import ArgumentParser, BooleanOptionalAction
 from datetime import datetime
@@ -51,6 +52,36 @@ def _sha256(path: str) -> str:
         for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _create_package_staging_directory(output_dir: str, attempts: int = 5) -> str:
+    """Reserve a new staging directory; retry only missing-parent visibility.
+
+    A concurrent creator on a shared filesystem can leave a client with stale
+    parent metadata. Never retry permission failures, replace existing packages,
+    or reuse a stale staging directory.
+    """
+    if attempts < 1:
+        raise ValueError('At least one directory creation attempt is required.')
+    output_dir = os.path.abspath(output_dir)
+    temporary = output_dir + '.incomplete'
+    parent = os.path.dirname(output_dir)
+    for attempt in range(attempts):
+        if os.path.lexists(output_dir):
+            raise FileExistsError(f'Refusing to overwrite existing output directory: {output_dir}')
+        if os.path.lexists(temporary):
+            raise FileExistsError(f'Refusing to overwrite stale temporary directory: {temporary}')
+        try:
+            os.makedirs(parent, exist_ok=True)
+            os.mkdir(temporary)
+            return temporary
+        except FileNotFoundError:
+            if attempt + 1 == attempts:
+                raise
+            delay = 2 ** attempt
+            print(f'Package parent is not yet visible; retrying directory creation in {delay}s: {parent}', flush=True)
+            time.sleep(delay)
+    raise AssertionError('Unreachable directory-creation state.')
 
 
 def _reuse_identical_weight_files(
@@ -301,18 +332,7 @@ def main() -> None:
         print("No reward_transform_matrix in checkpoint; using identity.")
 
     print(f"Saving finalized model to: {output_dir}")
-    temporary_output_dir = f"{output_dir}.incomplete"
-    if os.path.exists(temporary_output_dir):
-        raise FileExistsError(
-            f"Refusing to overwrite stale temporary directory: {temporary_output_dir}. "
-            "Inspect and remove it explicitly before retrying."
-        )
-    if os.path.exists(output_dir):
-        raise FileExistsError(
-            f"Refusing to overwrite existing output directory: {output_dir}. "
-            "Remove it explicitly after confirming that it is incomplete."
-        )
-    os.makedirs(temporary_output_dir, exist_ok=False)
+    temporary_output_dir = _create_package_staging_directory(output_dir)
     model.save_pretrained(
         temporary_output_dir,
         safe_serialization=True,
