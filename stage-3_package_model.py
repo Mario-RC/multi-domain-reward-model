@@ -1,6 +1,7 @@
 # stage-3_package_model.py
 
 import json
+import hashlib
 import os
 import shutil
 import sys
@@ -42,6 +43,66 @@ def _extract_stage1_weight_tensor(obj) -> torch.Tensor:
         if "regression_layer.weight" in obj and isinstance(obj["regression_layer.weight"], torch.Tensor):
             return obj["regression_layer.weight"]
     raise TypeError("Stage 1 checkpoint must contain a tensor under 'weight' or 'regression_layer.weight'.")
+
+
+def _sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _reuse_identical_weight_files(
+    output_dir: str,
+    reference_dir: str,
+    minimum_fraction: float = 0.5,
+) -> dict:
+    """Replace identical generated weight shards with verified hardlinks."""
+    if not 0 <= minimum_fraction <= 1:
+        raise ValueError("minimum reuse fraction must be in [0, 1]")
+    if not os.path.isdir(reference_dir):
+        raise FileNotFoundError(f"Weight-reuse package does not exist: {reference_dir}")
+    weight_paths = sorted(
+        os.path.join(output_dir, name)
+        for name in os.listdir(output_dir)
+        if name.endswith(".safetensors")
+    )
+    if not weight_paths:
+        raise ValueError("Generated package contains no safetensors weight files")
+    total_bytes = sum(os.path.getsize(path) for path in weight_paths)
+    reused_files = []
+    reused_bytes = 0
+    for generated in weight_paths:
+        reference = os.path.join(reference_dir, os.path.basename(generated))
+        if not os.path.isfile(reference):
+            continue
+        size = os.path.getsize(generated)
+        if size != os.path.getsize(reference):
+            continue
+        if _sha256(generated) != _sha256(reference):
+            continue
+        replacement = f"{generated}.reuse-link"
+        os.link(reference, replacement)
+        os.replace(replacement, generated)
+        if not os.path.samefile(reference, generated):
+            raise RuntimeError(f"Failed to hardlink verified shard: {generated}")
+        reused_files.append(os.path.basename(generated))
+        reused_bytes += size
+    reused_fraction = reused_bytes / total_bytes
+    if reused_fraction < minimum_fraction:
+        raise RuntimeError(
+            "Verified weight reuse is below the required threshold: "
+            f"reused_fraction={reused_fraction:.4f}, required={minimum_fraction:.4f}"
+        )
+    return {
+        "mode": "sha256_verified_hardlink",
+        "reference_dir": os.path.abspath(reference_dir),
+        "reused_files": reused_files,
+        "reused_bytes": reused_bytes,
+        "total_weight_bytes": total_bytes,
+        "reused_fraction": reused_fraction,
+    }
 
 
 def _build_defaults_from_config(config: dict, model_path: str, args=None):
@@ -103,6 +164,8 @@ def main() -> None:
     parser.add_argument("--reference_dataset_name", type=str, default=None, help="Reference dataset name (without split suffix, e.g., UltraFeedback-preference-standard).")
     parser.add_argument("--output_model_name", type=str, default=None, help="Optional packaged model directory name.")
     parser.add_argument("--output_dir", type=str, default=None, help="Optional override for final packaged model output directory.")
+    parser.add_argument("--reuse_weights_from", type=str, default=None, help="Reuse SHA-256-identical weight shards from an existing package through hardlinks.")
+    parser.add_argument("--minimum_reused_weight_fraction", type=float, default=0.5, help="Minimum weight-byte fraction that must be hardlinked when --reuse_weights_from is set.")
     parser.add_argument("--model_family", type=str, default=None, help="Model family (llama3, gemma2, qwen3, mistral, auto).")
     parser.add_argument("--temperature", type=float, default=2.0, help="Temperature used in stage-2 training (for locating checkpoint).")
     parser.add_argument("--n_steps", type=int, default=30000, help="Number of steps used in stage-2 training (for locating checkpoint).")
@@ -259,6 +322,20 @@ def main() -> None:
     for remote_code_file in ("modeling_custom.py", "utils.py"):
         shutil.copy2(os.path.join(os.path.dirname(os.path.abspath(__file__)), remote_code_file), temporary_output_dir)
 
+    weight_reuse = None
+    if args.reuse_weights_from:
+        print(f"Reusing identical weight shards from: {args.reuse_weights_from}")
+        weight_reuse = _reuse_identical_weight_files(
+            temporary_output_dir,
+            args.reuse_weights_from,
+            args.minimum_reused_weight_fraction,
+        )
+        print(
+            "Hardlinked "
+            f"{len(weight_reuse['reused_files'])} shard(s), "
+            f"{weight_reuse['reused_fraction']:.1%} of weight bytes."
+        )
+
     # Save training metadata so evaluate.py can discover stage-1/stage-2 paths.
     metadata = {
         "base_model_path": args.model_path,
@@ -266,6 +343,7 @@ def main() -> None:
         "stage_2_weights_path": stage_2_weights_path,
         "training_config": routing_config,
         "validation_metrics": stage2_payload.get("validation_metrics", {}) if isinstance(stage2_payload, dict) else {},
+        "weight_reuse": weight_reuse,
     }
     metadata_path = os.path.join(temporary_output_dir, "training_metadata.json")
     with open(metadata_path, "w", encoding="utf-8") as f:
