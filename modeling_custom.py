@@ -36,6 +36,9 @@ class GatingNetwork(nn.Module):
                 raise ValueError("active_attribute_indices contains an out-of-range index.")
             active_mask.zero_()
             active_mask[list(active_attribute_indices)] = True
+        self.active_attribute_indices = tuple(
+            range(out_features) if active_attribute_indices is None else active_attribute_indices
+        )
         # Derived from packaged config; omit from state_dict for legacy compatibility.
         self.register_buffer("active_attribute_mask", active_mask, persistent=False)
         layers = []
@@ -44,6 +47,17 @@ class GatingNetwork(nn.Module):
             in_features = hidden_dim
         layers.append(nn.Linear(in_features, out_features, bias=bias))
         self.layers = nn.ModuleList(layers)
+
+    @torch.no_grad()
+    def reset_active_attribute_mask(self):
+        """Restore config-derived state after a low-memory/meta-device load.
+
+        Transformers can materialize non-persistent buffers with empty_like;
+        their constructor values therefore are not sufficient initialization.
+        This method changes no trained parameter or persistent checkpoint key.
+        """
+        self.active_attribute_mask.zero_()
+        self.active_attribute_mask[list(self.active_attribute_indices)] = True
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         for i, layer in enumerate(self.layers):
@@ -72,6 +86,15 @@ class RewardModelWithGating(PreTrainedModel):
 
     config_class = AutoConfig
     base_model_prefix = "model"
+
+    def _init_weights(self, module):
+        if isinstance(module, GatingNetwork):
+            # The non-persistent mask is absent from saved weights by design.
+            # Initialize it when the loader materializes missing/derived state,
+            # without reinitializing the gating parameters it already loaded.
+            module.reset_active_attribute_mask()
+        else:
+            super()._init_weights(module)
 
     def __init__(self, config):
         super().__init__(config)
