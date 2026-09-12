@@ -27,8 +27,11 @@ class GatingNetwork(nn.Module):
         self.dropout_prob = dropout
         active_mask = torch.ones(out_features, dtype=torch.bool)
         if active_attribute_indices is not None:
-            if not active_attribute_indices:
-                raise ValueError("At least one attribute must be active.")
+            if (not isinstance(active_attribute_indices, (list, tuple))
+                    or not active_attribute_indices
+                    or any(type(index) is not int for index in active_attribute_indices)
+                    or len(set(active_attribute_indices)) != len(active_attribute_indices)):
+                raise ValueError("Active attribute indices must be unique integers in a nonempty sequence.")
             if min(active_attribute_indices) < 0 or max(active_attribute_indices) >= out_features:
                 raise ValueError("active_attribute_indices contains an out-of-range index.")
             active_mask.zero_()
