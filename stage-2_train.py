@@ -485,6 +485,7 @@ def main():
     parser.add_argument("--eval_every", type=int, default=200, help="Evaluate on validation set every N steps")
     parser.add_argument("--patience", type=int, default=15, help="Early stopping patience (number of evaluations without improvement)")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
+    parser.add_argument("--validation_group_ids_path", default=None, help="Frozen JSON containing validation_group_ids; separates the data partition from the training seed.")
     parser.add_argument("--checkpoint_tag", type=str, default=None, help="Optional safe tag appended to checkpoint names (letters, digits, underscore, hyphen).")
     parser.add_argument("--stage_1_weights_path", type=str, default=None, help="Optional override for Stage 1 regression weights path (default: auto-resolved _100pct.pt)")
     parser.add_argument(
@@ -542,6 +543,8 @@ def main():
         parser.error("--entropy_floor_fraction must be in [0, 1].")
     if args.held_out_domain and args.train_on_all:
         parser.error("--held_out_domain is incompatible with --train_on_all.")
+    if args.validation_group_ids_path and args.train_on_all:
+        parser.error("--validation_group_ids_path is incompatible with --train_on_all.")
     if args.training_row_indices_path and not args.train_on_all:
         parser.error("--training_row_indices_path requires --train_on_all.")
     if args.exclude_training_domain and not args.train_on_all:
@@ -808,10 +811,17 @@ def main():
     else:
         validation_mode = "external_full" if validation_group_ids_cpu is not None else "internal"
         split_group_ids = validation_group_ids_cpu if validation_group_ids_cpu is not None else G_cpu
-        splitter = GroupShuffleSplit(n_splits=1, test_size=args.val_size, random_state=args.seed)
-        split_train_np, val_np = next(
-            splitter.split(np.zeros(len(split_group_ids)), groups=split_group_ids.numpy())
-        )
+        if args.validation_group_ids_path:
+            from data_splits import frozen_group_split
+            split_train_np, val_np = frozen_group_split(
+                split_group_ids.numpy(), args.validation_group_ids_path,
+            )
+            validation_mode += "_frozen_groups"
+        else:
+            splitter = GroupShuffleSplit(n_splits=1, test_size=args.val_size, random_state=args.seed)
+            split_train_np, val_np = next(
+                splitter.split(np.zeros(len(split_group_ids)), groups=split_group_ids.numpy())
+            )
         val_idx = torch.from_numpy(val_np)
         val_groups = torch.unique(split_group_ids[val_idx])
         if validation_group_ids_cpu is None:
@@ -1238,6 +1248,7 @@ def main():
         "train_on_all": args.train_on_all,
         "metrics_scope": "training_refit" if args.train_on_all else "validation",
         "seed": args.seed, "val_size": args.val_size,
+        "validation_group_ids_path": args.validation_group_ids_path,
         "execution_device_type": device.type,
         "execution_amp_dtype": str(amp_dtype),
         "n_steps_requested": args.n_steps, "steps_completed": steps_completed,

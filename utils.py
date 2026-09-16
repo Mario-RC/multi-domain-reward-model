@@ -129,6 +129,11 @@ def shared_gate_checkpoint_filename(args, model_name: str, preference_name: str,
         suffix += f"_holdout-{held_out_domain}"
     checkpoint_tag = getattr(args, "checkpoint_tag", None)
     suffix += f"_tag-{checkpoint_tag}" if checkpoint_tag else ""
+    validation_manifest = getattr(args, "validation_group_ids_path", None)
+    if validation_manifest:
+        import hashlib
+        with open(validation_manifest, "rb") as stream:
+            suffix += "_vs-" + hashlib.sha256(stream.read()).hexdigest()[:16]
     suffix += "_refit" if getattr(args, "train_on_all", False) else ""
     filename = (
         f"gating_network_sgv2_{model_name}_mo_{args.multi_objective_dataset_name}_"
