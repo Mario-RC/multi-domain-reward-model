@@ -424,12 +424,14 @@ CLI values explicitly supplied by the user take precedence over their `config.ya
 
 | Model | Base reward model | Test accuracy (%) | Scoring Spearman |
 | :--- | :--- | :---: | :---: |
-| [**`multi-domain-rm-fsfairx-gemma-2-9b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-fsfairx-gemma-2-9b-it) | [sfairXC/FsfairX-Gemma2-RM-v0.1](https://huggingface.co/sfairXC/FsfairX-Gemma2-RM-v0.1) | **88.01** | 0.7346 |
-| [**`multi-domain-rm-skywork-qwen-3-8b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-skywork-qwen-3-8b-it) | [Skywork/Skywork-Reward-V2-Qwen3-8B](https://huggingface.co/Skywork/Skywork-Reward-V2-Qwen3-8B) | **87.82** | 0.7156 |
-| [**`multi-domain-rm-fsfairx-llama-3-8b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-fsfairx-llama-3-8b-it) | [sfairXC/FsfairX-LLaMA3-RM-v0.1](https://huggingface.co/sfairXC/FsfairX-LLaMA3-RM-v0.1) | **86.86** | 0.7108 |
-| [**`multi-domain-rm-skywork-llama-3.1-8b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-skywork-llama-3.1-8b-it) | [Skywork/Skywork-Reward-V2-Llama-3.1-8B](https://huggingface.co/Skywork/Skywork-Reward-V2-Llama-3.1-8B) | **86.82** | 0.7264 |
-| [**`multi-domain-rm-mistral-7b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-mistral-7b-it) | [weqweasdas/RM-Mistral-7B](https://huggingface.co/weqweasdas/RM-Mistral-7B) | **84.41** | 0.6710 |
-| [**`multi-domain-rm-qwen-3-nemotron-8b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-qwen-3-nemotron-8b-it) | [nvidia/Qwen3-Nemotron-8B-BRRM](https://huggingface.co/nvidia/Qwen3-Nemotron-8B-BRRM) | **83.65** | 0.6704 |
+| [**`multi-domain-rm-fsfairx-gemma-2-9b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-fsfairx-gemma-2-9b-it) | [sfairXC/FsfairX-Gemma2-RM-v0.1](https://huggingface.co/sfairXC/FsfairX-Gemma2-RM-v0.1) | **88.80** | 0.7346 |
+| [**`multi-domain-rm-skywork-qwen-3-8b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-skywork-qwen-3-8b-it) | [Skywork/Skywork-Reward-V2-Qwen3-8B](https://huggingface.co/Skywork/Skywork-Reward-V2-Qwen3-8B) | **88.08** | 0.7156 |
+| [**`multi-domain-rm-fsfairx-llama-3-8b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-fsfairx-llama-3-8b-it) | [sfairXC/FsfairX-LLaMA3-RM-v0.1](https://huggingface.co/sfairXC/FsfairX-LLaMA3-RM-v0.1) | **87.75** | 0.7108 |
+| [**`multi-domain-rm-skywork-llama-3.1-8b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-skywork-llama-3.1-8b-it) | [Skywork/Skywork-Reward-V2-Llama-3.1-8B](https://huggingface.co/Skywork/Skywork-Reward-V2-Llama-3.1-8B) | **86.99** | 0.7264 |
+| [**`multi-domain-rm-mistral-7b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-mistral-7b-it) | [weqweasdas/RM-Mistral-7B](https://huggingface.co/weqweasdas/RM-Mistral-7B) | **85.25** | 0.6710 |
+| [**`multi-domain-rm-qwen-3-nemotron-8b-it`**](https://huggingface.co/mario-rc/multi-domain-rm-qwen-3-nemotron-8b-it) | [nvidia/Qwen3-Nemotron-8B-BRRM](https://huggingface.co/nvidia/Qwen3-Nemotron-8B-BRRM) | **84.35** | 0.6704 |
+
+Test accuracy is measured on the internal multi-domain test set. The internal test was examined during development, and a source audit identified some train–test prompt overlap. These results are not an independent confirmation of generalization.
 
 ---
 
