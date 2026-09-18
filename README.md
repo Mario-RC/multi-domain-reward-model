@@ -555,7 +555,7 @@ Generated artifacts can be large and are ignored by Git.
 ## Repository Structure
 
 ```text
-multidomain_model/
+multi-domain-reward-model/
 ├── attributes.py                # canonical 23-attribute definition
 ├── config.yaml                  # configuration for all pipeline stages
 ├── data/                        # dataset loaders and small templates
